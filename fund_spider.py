@@ -12,7 +12,7 @@ MY_POSITIONS = {
 }
 
 def get_fund_realtime_data(fund_code):
-    # 👑 核心改动：改用新浪财经接口，对海外云服务器极度友好，绝不轻易拦截
+    # 👑 改用新浪财经接口，对海外云服务器极度友好，绝不拦截
     url = f"https://hq.sinajs.cn/list=f_{fund_code}"
     headers = {
         "Referer": "https://finance.sina.com.cn",
@@ -20,18 +20,16 @@ def get_fund_realtime_data(fund_code):
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        # 新浪接口返回的是中文 GBK 编码，需要特殊声明防止乱码
-        response.encoding = 'gbk'
+        response.encoding = 'gbk' # 防止中文乱码
         
         text = response.text
         if '"' in text:
-            # 提取双引号内部的基金数据
             content = text.split('"')[1]
             if content:
                 data_list = content.split(',')
                 if len(data_list) >= 5:
                     return {
-                        "current_nav": float(data_list[1]),   # 当前最新净值/估值
+                        "current_nav": float(data_list[1]),   # 当前最新估值
                         "yesterday_nav": float(data_list[3]), # 昨日单位净值
                     }
     except Exception as e:
@@ -53,7 +51,6 @@ def update_dashboard_data():
         current_nav = data['current_nav']
         yesterday_nav = data['yesterday_nav']
         
-        # 依靠昨日净值和当前净值，计算精准的今日涨跌幅
         if yesterday_nav > 0:
             daily_growth = ((current_nav - yesterday_nav) / yesterday_nav) * 100
         else:
@@ -62,8 +59,6 @@ def update_dashboard_data():
         cost = info['shares'] * info['cost_price']
         value = info['shares'] * current_nav
         profit = value - cost
-        
-        # 今日预计盈亏 = 持仓份额 * (今日净值 - 昨日净值)
         fund_daily_profit = info['shares'] * (current_nav - yesterday_nav)
         
         total_value += value
@@ -81,7 +76,6 @@ def update_dashboard_data():
             "profit": round(profit, 2)
         })
 
-    # 安全检查：如果全部失败，不覆盖线上数据
     if not position_list:
         print("⚠️ 未能成功从新浪财经抓取到任何有效持仓，本次不更新文件")
         return
