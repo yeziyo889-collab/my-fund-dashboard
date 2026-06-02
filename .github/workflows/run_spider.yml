@@ -43,7 +43,7 @@ jobs:
       uses: actions/configure-pages@v5
 
     - name: 上传网页和数据产物 🚀
-      uses: actions/upload-pages-artifact@v4
+      uses: actions/upload-pages-artifact@v3
       with:
         path: '.'
 
