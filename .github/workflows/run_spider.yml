@@ -6,15 +6,29 @@ on:
     - cron: '40 7 * * 1-5'
   workflow_dispatch: # 允许手动点击运行
 
+# 👑 核心改进：赋予该任务直接发布网页的最高权限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 防止多次运行产生冲突
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   update-data:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
     - name: 检出仓库代码
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: 设置 Python 环境
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.x'
 
@@ -26,15 +40,15 @@ jobs:
     - name: 运行机器人抓取数据
       run: python fund_spider.py
 
-    - name: 把新数据保存回基地
-      run: |
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-        git add data.json
-        # 如果数据没有变化，就不强行提交
-        git commit -m "自动更新基金数据" || echo "没有数据需要更新"
-        
-        # 👑 核心改进：在推送到基地前，先拉取并自动合并最新的线上修改，彻底解决塞车拒绝问题
-        git pull --rebase origin main
-        
-        git push
+    - name: 配置 Pages 运行环境
+      uses: actions/configure-pages@v4
+
+    - name: 上传网页和数据产物
+      uses: actions/upload-pages-artifact@v3
+      with:
+        # 打包当前文件夹下的所有东西（包含 index.html 和刚刚生成的最新 data.json）
+        path: '.'
+
+    - name: 直接闪电发布到网页 🚀
+      id: deployment
+      uses: actions/deploy-pages@v4
