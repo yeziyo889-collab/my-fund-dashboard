@@ -1,0 +1,36 @@
+name: Update Fund Data
+
+on:
+  schedule:
+    # 意思是：每周一到周五，北京时间下午 3:40 自动运行（收盘后估值最准）
+    # 注：GitHub 使用的是国际标准时间(UTC)，比北京时间慢 8 小时，所以 7:40 就是北京时间 15:40
+    - cron: '40 7 * * 1-5'
+  workflow_dispatch: # 这行代码允许你以后随时手动点击按钮更新
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 检出仓库代码
+      uses: actions/checkout@v3
+
+    - name: 设置 Python 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: 安装工具箱依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 运行机器人抓取数据
+      run: python fund_spider.py
+
+    - name: 把新数据保存回基地
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git add data.json
+        git commit -m "自动更新基金数据" || echo "没有数据需要更新"
+        git push
