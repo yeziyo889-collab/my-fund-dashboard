@@ -6,6 +6,10 @@ on:
     - cron: '40 7 * * 1-5'
   workflow_dispatch: # 允许手动点击运行
 
+# 👑 核心改进 1：显式锁死基地文件写入权限，不再依赖任何页面手动勾选
+permissions:
+  contents: write
+
 jobs:
   update-data:
     runs-on: ubuntu-latest
@@ -26,16 +30,20 @@ jobs:
     - name: 运行机器人抓取数据
       run: python fund_spider.py
 
-    - name: 把新数据保存回基地
+    - name: 顶配重置流：把新数据保存回基地 🚀
       run: |
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # 👑 核心改进 2：强制对齐线上最新历史，彻底降维打击一切合并冲突
+        git fetch origin main
+        git reset --mixed origin/main
+        
+        # 重新打包最新数据并递交
         git add data.json
-        # 如果数据没有变化，就不强行提交
-        git commit -m "自动更新基金数据" || echo "没有数据需要更新"
-        
-        # 先拉取线上最新状态，防止塞车
-        git pull --rebase origin main
-        
-        # 推送数据
-        git push
+        if ! git diff-index --quiet HEAD; then
+          git commit -m "自动更新基金数据"
+          git push origin HEAD:main
+        else
+          echo "数据未发生变化，无需更新"
+        fi
