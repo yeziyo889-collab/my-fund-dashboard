@@ -1,10 +1,10 @@
 import requests
 import json
-import re
 from datetime import datetime
 
 # ====================================================
-# 💰 测试持仓：这里换成了两个一定有盘中实时估值的基金
+# 💰 你的真实持仓配置（以后随时在这里修改数字即可）
+# 格式: "基金代码": {"name": "自定义看板显示的名称", "shares": 持仓份额, "cost_price": 买入成本均价}
 # ====================================================
 MY_POSITIONS = {
     "161725": {"name": "招商中证白酒指数", "shares": 5000.0, "cost_price": 1.2500},
@@ -12,25 +12,28 @@ MY_POSITIONS = {
 }
 
 def get_fund_realtime_data(fund_code):
-    url = f"http://fundgz.1234567.cn/js/{fund_code}.js"
-    
-    # 👑 核心改进：加入高级浏览器伪装和防盗链引用，防止被天天基金拦截
+    # 👑 核心改动：改用新浪财经接口，对海外云服务器极度友好，绝不轻易拦截
+    url = f"https://hq.sinajs.cn/list=f_{fund_code}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://fund.eastmoney.com/",
-        "Connection": "keep-alive"
+        "Referer": "https://finance.sina.com.cn",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            print(f"基金 {fund_code} 请求被拦截，状态码: {response.status_code}")
-            return None
-            
-        match = re.search(r'jsonpgz\((.*)\);', response.text)
-        if match:
-            return json.loads(match.group(1))
-        else:
-            print(f"基金 {fund_code} 接口返回格式不匹配，收到内容: {response.text[:100]}")
+        # 新浪接口返回的是中文 GBK 编码，需要特殊声明防止乱码
+        response.encoding = 'gbk'
+        
+        text = response.text
+        if '"' in text:
+            # 提取双引号内部的基金数据
+            content = text.split('"')[1]
+            if content:
+                data_list = content.split(',')
+                if len(data_list) >= 5:
+                    return {
+                        "current_nav": float(data_list[1]),   # 当前最新净值/估值
+                        "yesterday_nav": float(data_list[3]), # 昨日单位净值
+                    }
     except Exception as e:
         print(f"获取基金 {fund_code} 异常: {e}")
     return None
@@ -43,21 +46,25 @@ def update_dashboard_data():
 
     for code, info in MY_POSITIONS.items():
         data = get_fund_realtime_data(code)
-        if not data:
+        if not data or data['current_nav'] == 0:
+            print(f"⚠️ 基金 {code} 接口未返回有效数据，跳过")
             continue
         
-        # 安全检查：确保接口返回了估值数据
-        if 'gsz' not in data or 'gszzl' not in data:
-            print(f"基金 {data.get('name', code)} 当前无实时估值，跳过")
-            continue
-
-        current_nav = float(data['gsz']) # 当前估值
-        daily_growth = float(data['gszzl']) # 今日涨跌幅 (%)
+        current_nav = data['current_nav']
+        yesterday_nav = data['yesterday_nav']
+        
+        # 依靠昨日净值和当前净值，计算精准的今日涨跌幅
+        if yesterday_nav > 0:
+            daily_growth = ((current_nav - yesterday_nav) / yesterday_nav) * 100
+        else:
+            daily_growth = 0.0
         
         cost = info['shares'] * info['cost_price']
         value = info['shares'] * current_nav
         profit = value - cost
-        fund_daily_profit = value * (daily_growth / 100)
+        
+        # 今日预计盈亏 = 持仓份额 * (今日净值 - 昨日净值)
+        fund_daily_profit = info['shares'] * (current_nav - yesterday_nav)
         
         total_value += value
         total_cost += cost
@@ -65,18 +72,18 @@ def update_dashboard_data():
         
         position_list.append({
             "code": code,
-            "name": data['name'],
+            "name": info['name'], 
             "shares": info['shares'],
             "cost_price": info['cost_price'],
             "current_nav": current_nav,
-            "daily_growth": f"{daily_growth}%",
+            "daily_growth": f"{round(daily_growth, 2)}%",
             "value": round(value, 2),
             "profit": round(profit, 2)
         })
 
-    # 🔥 安全保护：如果全部抓取失败，不覆盖旧文件，防止把网页洗白
+    # 安全检查：如果全部失败，不覆盖线上数据
     if not position_list:
-        print("⚠️ 未能成功抓取到任何有效的基金数据，本次不更新 data.json")
+        print("⚠️ 未能成功从新浪财经抓取到任何有效持仓，本次不更新文件")
         return
 
     dashboard_data = {
@@ -91,7 +98,7 @@ def update_dashboard_data():
 
     with open('data.json', 'w', encoding='utf-8') as f:
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
-    print("🎉 恭喜！数据成功更新并写入 data.json！")
+    print("🎉 新浪财经数据源全自动更新成功！")
 
 if __name__ == "__main__":
     update_dashboard_data()
