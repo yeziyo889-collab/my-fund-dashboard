@@ -6,13 +6,12 @@ on:
     - cron: '40 7 * * 1-5'
   workflow_dispatch: # 允许手动点击运行
 
-# 👑 核心改进：赋予该任务直接发布网页的最高权限
+# 赋予该任务直接发布网页的最高权限
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# 防止多次运行产生冲突
 concurrency:
   group: "pages"
   cancel-in-progress: false
@@ -41,14 +40,13 @@ jobs:
       run: python fund_spider.py
 
     - name: 配置 Pages 运行环境
-      uses: actions/configure-pages@v4
+      uses: actions/configure-pages@v5
 
-    - name: 上传网页和数据产物
-      uses: actions/upload-pages-artifact@v3
+    - name: 上传网页和数据产物 🚀
+      uses: actions/upload-pages-artifact@v4
       with:
-        # 打包当前文件夹下的所有东西（包含 index.html 和刚刚生成的最新 data.json）
         path: '.'
 
-    - name: 直接闪电发布到网页 🚀
+    - name: 直接闪电发布到网页 🎯
       id: deployment
       uses: actions/deploy-pages@v4
