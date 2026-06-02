@@ -6,7 +6,7 @@ on:
     - cron: '40 7 * * 1-5'
   workflow_dispatch: # 允许手动点击运行
 
-# 👑 核心改进 1：显式锁死基地文件写入权限，不再依赖任何页面手动勾选
+# 显式声明最高写入权限
 permissions:
   contents: write
 
@@ -16,6 +16,8 @@ jobs:
     steps:
     - name: 检出仓库代码
       uses: actions/checkout@v4
+      with:
+        persist-credentials: true # 👑 核心改进 1：强制保持登录凭证，防止身份过期
 
     - name: 设置 Python 环境
       uses: actions/setup-python@v5
@@ -30,20 +32,20 @@ jobs:
     - name: 运行机器人抓取数据
       run: python fund_spider.py
 
-    - name: 顶配重置流：把新数据保存回基地 🚀
+    - name: 提交并推送数据 🚀
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 👑 核心改进 2：直接下发最高通行令牌
       run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         
-        # 👑 核心改进 2：强制对齐线上最新历史，彻底降维打击一切合并冲突
-        git fetch origin main
-        git reset --mixed origin/main
-        
-        # 重新打包最新数据并递交
+        # 仅把发生变化的数据文件加入暂存区
         git add data.json
-        if ! git diff-index --quiet HEAD; then
+        
+        # 检查文件是否有真实改动，有则提交并强行推送，彻底避免塞车
+        if ! git diff --cached --quiet; then
           git commit -m "自动更新基金数据"
           git push origin HEAD:main
         else
-          echo "数据未发生变化，无需更新"
+          echo "数据无变化，跳过推送"
         fi
