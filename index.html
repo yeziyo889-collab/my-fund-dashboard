@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的基金投资看板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4 md:p-6">
+
+    <div class="max-w-6xl mx-auto">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 border-b border-gray-800 pb-4 gap-2">
+            <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-emerald-400">📊 基金实时资产看板</h1>
+            <p class="text-xs md:text-sm text-gray-400">数据更新时间：<span id="update-time" class="font-mono text-yellow-400">正在加载...</span></p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
+            <div class="bg-gray-800 p-5 md:p-6 rounded-xl border border-gray-700 shadow-lg">
+                <p class="text-gray-400 text-xs md:text-sm font-medium">当前总资产 (元)</p>
+                <p id="total-value" class="text-2xl md:text-3xl font-bold mt-2 text-white font-mono">0.00</p>
+            </div>
+            <div class="bg-gray-800 p-5 md:p-6 rounded-xl border border-gray-700 shadow-lg">
+                <p class="text-gray-400 text-xs md:text-sm font-medium">今日预计盈亏 (估算)</p>
+                <p id="daily-profit" class="text-2xl md:text-3xl font-bold mt-2 font-mono">0.00</p>
+            </div>
+            <div class="bg-gray-800 p-5 md:p-6 rounded-xl border border-gray-700 shadow-lg">
+                <p class="text-gray-400 text-xs md:text-sm font-medium">持仓累计总盈亏</p>
+                <p id="total-profit" class="text-2xl md:text-3xl font-bold mt-2 font-mono">0.00</p>
+            </div>
+        </div>
+
+        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-8">
+            <div class="p-4 md:p-5 border-b border-gray-700 flex justify-between items-center">
+                <h2 class="text-lg md:text-xl font-semibold text-white">📈 当前持仓明细</h2>
+                <span class="text-xs text-gray-400 bg-gray-700 px-2 py-1 rounded">自动刷新中</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse min-w-[600px]">
+                    <thead>
+                        <tr class="bg-gray-750 text-gray-400 text-xs md:text-sm border-b border-gray-700">
+                            <th class="p-4">基金名称/代码</th>
+                            <th class="p-4">持仓份额</th>
+                            <th class="p-4">成本均价</th>
+                            <th class="p-4">当前估值</th>
+                            <th class="p-4">今日涨跌</th>
+                            <th class="p-4">当前市值</th>
+                            <th class="p-4">持有盈亏</th>
+                        </tr>
+                    </thead>
+                    <tbody id="position-table" class="divide-y divide-gray-700 text-xs md:text-sm">
+                        <tr><td colspan="7" class="p-4 text-center text-gray-500">正在等待云端第一次生成数据...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const defColor = (val) => val >= 0 ? 'text-rose-500' : 'text-emerald-500';
+        const defSign = (val) => val >= 0 ? `+${val}` : val;
+
+        async function refreshDashboard() {
+            try {
+                const response = await fetch('data.json?t=' + new Date().getTime());
+                if(!response.ok) {
+                    throw new Error("等待初始化数据");
+                }
+                const data = await response.json();
+
+                document.getElementById('update-time').innerText = data.update_time;
+                document.getElementById('total-value').innerText = data.summary.total_value.toLocaleString(undefined, {minimumFractionDigits: 2});
+                
+                const dailyProfitEl = document.getElementById('daily-profit');
+                dailyProfitEl.innerText = defSign(data.summary.daily_profit.toLocaleString(undefined, {minimumFractionDigits: 2}));
+                dailyProfitEl.className = `text-2xl md:text-3xl font-bold mt-2 font-mono ${defColor(data.summary.daily_profit)}`;
+
+                const totalProfitEl = document.getElementById('total-profit');
+                totalProfitEl.innerText = defSign(data.summary.total_profit.toLocaleString(undefined, {minimumFractionDigits: 2}));
+                totalProfitEl.className = `text-2xl md:text-3xl font-bold mt-2 font-mono ${defColor(data.summary.total_profit)}`;
+
+                const tbody = document.getElementById('position-table');
+                tbody.innerHTML = '';
+
+                data.positions.forEach(pos => {
+                    const tr = document.createElement('tr');
+                    tr.className = "hover:bg-gray-700/50 transition-colors";
+                    tr.innerHTML = `
+                        <td class="p-4 font-medium text-white">${pos.name}<br><span class="text-xs text-gray-500 font-mono">${pos.code}</span></td>
+                        <td class="p-4 text-gray-300 font-mono">${pos.shares.toLocaleString()}</td>
+                        <td class="p-4 text-gray-300 font-mono">${pos.cost_price.toFixed(4)}</td>
+                        <td class="p-4 text-yellow-400 font-mono font-semibold">${pos.current_nav.toFixed(4)}</td>
+                        <td class="p-4 ${defColor(parseFloat(pos.daily_growth))} font-semibold font-mono">${pos.daily_growth}</td>
+                        <td class="p-4 text-white font-medium font-mono">￥${pos.value.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td class="p-4 ${defColor(pos.profit)} font-semibold font-mono">￥${defSign(pos.profit.toLocaleString(undefined, {minimumFractionDigits: 2}))}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+            } catch (error) {
+                console.log(error.message);
+            }
+        }
+
+        refreshDashboard();
+        setInterval(refreshDashboard, 60000); // 每60秒刷新一次
+    </script>
+</body>
+</html>
