@@ -2,10 +2,9 @@ name: Update Fund Data
 
 on:
   schedule:
-    # 意思是：每周一到周五，北京时间下午 3:40 自动运行（收盘后估值最准）
-    # 注：GitHub 使用的是国际标准时间(UTC)，比北京时间慢 8 小时，所以 7:40 就是北京时间 15:40
+    # 💥 每周一到周五，北京时间下午 3:40 自动运行
     - cron: '40 7 * * 1-5'
-  workflow_dispatch: # 这行代码允许你以后随时手动点击按钮更新
+  workflow_dispatch: # 允许手动点击运行
 
 jobs:
   update-data:
@@ -32,5 +31,10 @@ jobs:
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         git add data.json
+        # 如果数据没有变化，就不强行提交
         git commit -m "自动更新基金数据" || echo "没有数据需要更新"
+        
+        # 👑 核心改进：在推送到基地前，先拉取并自动合并最新的线上修改，彻底解决塞车拒绝问题
+        git pull --rebase origin main
+        
         git push
