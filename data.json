@@ -1,9 +1,20 @@
 {
-    "update_time": "2026-06-02 04:37:51",
+    "update_time": "2026-06-02 05:15:14",
     "summary": {
-        "total_value": 0,
-        "total_profit": 0,
-        "daily_profit": 0
+        "total_value": 808625000.0,
+        "total_profit": 808618750.0,
+        "daily_profit": 808622130.0
     },
-    "positions": []
+    "positions": [
+        {
+            "code": "161725",
+            "name": "招商中证白酒指数",
+            "shares": 5000.0,
+            "cost_price": 1.25,
+            "current_nav": 161725.0,
+            "daily_growth": "28174987.11%",
+            "value": 808625000.0,
+            "profit": 808618750.0
+        }
+    ]
 }
