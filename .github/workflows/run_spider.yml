@@ -2,11 +2,10 @@ name: Update Fund Data
 
 on:
   schedule:
-    # 💥 每周一到周五，北京时间下午 3:40 自动运行
-    - cron: '40 7 * * 1-5'
+    # 💥 每周一到周五，北京时间下午 14:30 准时自动运行
+    - cron: '30 6 * * 1-5'
   workflow_dispatch: # 允许手动点击运行
 
-# 显式声明最高写入权限
 permissions:
   contents: write
 
@@ -17,7 +16,7 @@ jobs:
     - name: 检出仓库代码
       uses: actions/checkout@v4
       with:
-        persist-credentials: true # 👑 核心改进 1：强制保持登录凭证，防止身份过期
+        persist-credentials: true
 
     - name: 设置 Python 环境
       uses: actions/setup-python@v5
@@ -29,20 +28,20 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: 运行机器人抓取数据
+    - name: 运行机器人抓取数据并推送 🚀
+      env:
+        # 👑 核心改进：把 GitHub 网页端保存的保险箱钥匙，传授给运行中的 Python 脚本
+        WXPUSHER_APP_TOKEN: ${{ secrets.WXPUSHER_APP_TOKEN }}
+        WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
       run: python fund_spider.py
 
-    - name: 提交并推送数据 🚀
+    - name: 提交并推送数据
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 👑 核心改进 2：直接下发最高通行令牌
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         git config --local user.name "github-actions[bot]"
         git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        
-        # 仅把发生变化的数据文件加入暂存区
         git add data.json
-        
-        # 检查文件是否有真实改动，有则提交并强行推送，彻底避免塞车
         if ! git diff --cached --quiet; then
           git commit -m "自动更新基金数据"
           git push origin HEAD:main
