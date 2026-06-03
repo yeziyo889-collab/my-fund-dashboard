@@ -4,20 +4,20 @@ import os
 from datetime import datetime
 
 # ====================================================
-# 💰 你的 8 支基础持仓配置
+# 💰 你的 8 支真实指数化基金持仓配置（全线精准对齐官方代码）
 # ====================================================
 MY_POSITIONS = {
     "000216": {"name": "华安黄金ETF联接A", "track_code": "sh518880", "shares": 10000.0, "cost_price": 1.0300, "is_domestic": True},
-    "007671": {"name": "摩根标普500指数(QDII)A", "track_code": "sh513500", "shares": 5000.0, "cost_price": 1.2500, "is_domestic": False},
-    "004342": {"name": "天弘纳斯达克100指数(QDII)A", "track_code": "sh513100", "shares": 8000.0, "cost_price": 1.4200, "is_domestic": False},
+    "017641": {"name": "摩根标普500指数(QDII)A", "track_code": "sh513500", "shares": 5000.0, "cost_price": 1.2500, "is_domestic": False},
+    "018043": {"name": "天弘纳斯达克100指数(QDII)A", "track_code": "sh513100", "shares": 8000.0, "cost_price": 1.4200, "is_domestic": False},
     "110026": {"name": "易方达创业板ETF联接A", "track_code": "sz159915", "shares": 12000.0, "cost_price": 1.8500, "is_domestic": True},
     "110020": {"name": "易方达沪深300ETF联接A", "track_code": "sh510300", "shares": 15000.0, "cost_price": 2.1500, "is_domestic": True},
     "011608": {"name": "易方达科创50联接A", "track_code": "sh588000", "shares": 6000.0, "cost_price": 0.9500, "is_domestic": True},
-    "002736": {"name": "易方达中证500ETF联接A", "track_code": "sh510500", "shares": 7000.0, "cost_price": 1.3500, "is_domestic": True},
+    "007028": {"name": "易方达中证500ETF联接A", "track_code": "sh510500", "shares": 7000.0, "cost_price": 1.3500, "is_domestic": True},
     "009051": {"name": "易方达中证红利ETF联接A", "track_code": "sh515180", "shares": 10000.0, "cost_price": 1.1000, "is_domestic": True}
 }
 
-TRANSACTION_LOGS = [] # 留空，等待后续你发给我统一追加
+TRANSACTION_LOGS = [] # 个人买卖记录留空，等待你随时发我追加
 
 def get_data(fund_code, track_code, is_domestic):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -25,18 +25,29 @@ def get_data(fund_code, track_code, is_domestic):
     official_yesterday_nav = 1.0
     daily_growth = 0.0
 
+    # 1. 安全抓取场外官方最新已公开净值
     try:
         url_jj = f"http://qt.gtimg.cn/q=jj{fund_code}"
         res_jj = requests.get(url_jj, headers=headers, timeout=5)
         res_jj.encoding = 'gbk'
         if '~' in res_jj.text:
             parts = res_jj.text.split('"')[1].split('~')
-            if len(parts) >= 4:
-                official_nav = float(parts[1])
-                official_yesterday_nav = float(parts[3])
+            if len(parts) >= 3:
+                # 🛡️ 逻辑修正：parts[0]是代码，parts[1]是中文名，parts[2]才是真正的单位净值数字
+                official_nav = float(parts[2])
+            
+            # 尝试安全抓取前一日净值，防范非数字异常
+            if len(parts) >= 5:
+                try:
+                    official_yesterday_nav = float(parts[4])
+                except ValueError:
+                    official_yesterday_nav = official_nav
+            else:
+                official_yesterday_nav = official_nav
     except Exception as e:
-        print(f"异常 {fund_code}: {e}")
+        print(f"⚠️ 场外官方数据解析提示 ({fund_code}): {e}")
 
+    # 2. 联动场内动态涨跌幅
     if is_domestic:
         try:
             url_stock = f"http://qt.gtimg.cn/q={track_code}"
@@ -49,41 +60,44 @@ def get_data(fund_code, track_code, is_domestic):
                 if yesterday_close > 0:
                     daily_growth = ((current_price - yesterday_close) / yesterday_close) * 100
         except Exception as e:
-            print(f"异常 {track_code}: {e}")
+            print(f"⚠️ 场内影子网路同步提示 ({track_code}): {e}")
     else:
-        daily_growth = 0.0
+        daily_growth = 0.0  # 海外QDII在14:30保持静态资产
 
     estimated_nav = official_nav * (1 + daily_growth / 100)
-    return {"official_nav": official_nav, "official_yesterday_nav": official_yesterday_nav, "estimated_nav": estimated_nav, "daily_growth": daily_growth}
+    return {
+        "official_nav": official_nav, 
+        "official_yesterday_nav": official_yesterday_nav, 
+        "estimated_nav": estimated_nav, 
+        "daily_growth": daily_growth
+    }
 
-# 👑 核心新增：WxPusher 微信发送模块，读取 GitHub 保险箱数据
 def push_to_wechat(summary_est, position_list):
     app_token = os.environ.get("WXPUSHER_APP_TOKEN")
     uid = os.environ.get("WXPUSHER_UID")
     
     if not app_token or not uid:
-        print("⚠️ GitHub 保险箱中未检测到 WxPusher 凭证，跳过微信推送。")
+        print("⚠️ 未检测到加密密钥，跳过微信推送流程。")
         return
 
-    # 制作精美的 HTML 微信推文卡片排版
     time_str = datetime.now().strftime("%m-%d %H:%M")
     color_dp = "#ef4444" if summary_est['daily_profit'] >= 0 else "#22c55e"
     sign_dp = "+" if summary_est['daily_profit'] >= 0 else ""
     
     html_content = f"""
-    <div style="font-family: sans-serif; padding: 10px; background-color: #f8fafc;">
-        <h3 style="color: #0f172a; margin-bottom: 5px;">📊 14:30 盘中动态资产快报</h3>
-        <p style="font-size: 11px; color: #64748b; margin-top:0;">生成时间: {time_str}</p>
+    <div style="font-family: sans-serif; padding: 12px; background-color: #f8fafc; border-radius: 10px;">
+        <h3 style="color: #0f172a; margin-bottom: 4px; font-size: 16px;">📊 14:30 盘中资产动态快报</h3>
+        <p style="font-size: 11px; color: #64748b; margin-top:0; margin-bottom:12px;">同步时间: {time_str}</p>
         
-        <div style="background: #0f172a; color: #fff; padding: 15px; rounded-corners: 8px; border-radius: 8px; margin-bottom: 15px;">
-            <div style="font-size: 12px; color: #94a3b8;">估算总资产 (元)</div>
-            <div style="font-size: 24px; font-weight: bold; margin: 5px 0;">￥{summary_est['total_value']:,.2f}</div>
+        <div style="background: #1e293b; color: #fff; padding: 16px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+            <div style="font-size: 12px; color: #cbd5e1;">预估总资产 (元)</div>
+            <div style="font-size: 26px; font-weight: bold; margin: 6px 0; font-family: monospace;">￥{summary_est['total_value']:,.2f}</div>
             <div style="font-size: 13px; color: {color_dp}; font-weight: bold;">
-                今日动态预计损益: {sign_dp}{summary_est['daily_profit']:,.2f}
+                今日预计损益: {sign_dp}{summary_est['daily_profit']:,.2f}
             </div>
         </div>
         
-        <h4 style="color: #334155; margin-bottom: 8px;">📋 A股标的实时估值明细:</h4>
+        <h4 style="color: #475569; margin-bottom: 6px; font-size: 13px;">📋 A股持仓实时估值明细:</h4>
         <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
     """
     
@@ -91,16 +105,16 @@ def push_to_wechat(summary_est, position_list):
         if pos['is_domestic']:
             p_color = "#ef4444" if "-" not in pos['daily_growth'] and pos['daily_growth'] != "0.0%" else "#22c55e"
             html_content += f"""
-            <tr style="border-b: 1px solid #e2e8f0; height: 35px;">
-                <td style="color: #1e293b; font-weight: bold;">{pos['name']}</td>
-                <td style="text-align: right; color: {p_color}; font-weight: bold;">{pos['daily_growth']}</td>
-                <td style="text-align: right; color: #475569; font-weight: bold;">￥{pos['estimated_value']:,.0f}</td>
+            <tr style="border-bottom: 1px solid #e2e8f0; height: 36px;">
+                <td style="color: #334155; font-weight: bold;">{pos['name']}</td>
+                <td style="text-align: right; color: {p_color}; font-weight: bold; font-family: monospace; width: 70px;">{pos['daily_growth']}</td>
+                <td style="text-align: right; color: #1e293b; font-weight: bold; font-family: monospace; width: 90px;">￥{pos['estimated_value']:,.0f}</td>
             </tr>
             """
             
     html_content += """
         </table>
-        <p style="font-size: 11px; color: #94a3b8; margin-top: 15px; text-align: center;">💡 提示：美股标的时差已在推送中自动隐藏</p>
+        <p style="font-size: 10px; color: #94a3b8; margin-top: 16px; text-align: center; font-style: italic;">💡 提示：美股QDII时差已在14:30推送中自动隐藏</p>
     </div>
     """
 
@@ -108,14 +122,14 @@ def push_to_wechat(summary_est, position_list):
     payload = {
         "appToken": app_token,
         "content": html_content,
-        "contentType": 2, # 代表 HTML 格式
+        "contentType": 2, 
         "uids": [uid]
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
         print("微信投递结果日志:", res.json())
     except Exception as e:
-        print("微信推送失败:", e)
+        print("微信推送网络异常:", e)
 
 def update_dashboard_data():
     est_total_value, est_total_cost, est_daily_profit = 0, 0, 0
@@ -150,7 +164,7 @@ def update_dashboard_data():
         
         position_list.append({
             "code": code, "name": info['name'], "is_domestic": info['is_domestic'], "shares": info['shares'], "cost_price": info['cost_price'],
-            "estimated_nav": round(data['estimated_nav'], 4) if info['is_domestic'] else round(data['official_nav'], 4),
+            "estimated_nav": round(data['estimated_nav'], 4),
             "daily_growth": est_growth_str, "estimated_value": round(est_val, 2), "estimated_profit": round(est_prof, 2),
             "official_nav": round(data['official_nav'], 4),
             "official_growth": f"{round(((data['official_nav']-data['official_yesterday_nav'])/data['official_yesterday_nav'])*100, 2)}%" if data['official_yesterday_nav'] > 0 else "0.0%",
@@ -169,9 +183,7 @@ def update_dashboard_data():
     with open('data.json', 'w', encoding='utf-8') as f:
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
-    # 🚀 执行推送
     push_to_wechat(summary_est, position_list)
-    print("🎉 过滤美股版双轨数据重构并推送成功！")
 
 if __name__ == "__main__":
     update_dashboard_data()
