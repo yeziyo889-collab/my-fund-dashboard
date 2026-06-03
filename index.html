@@ -3,106 +3,220 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>我的基金投资看板</title>
+    <title>ETF估值与个人持仓记账双轨看板</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen p-4 md:p-6">
+<body class="bg-gray-950 text-gray-100 min-h-screen p-4 md:p-6 font-sans">
 
-    <div class="max-w-6xl mx-auto">
-        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 border-b border-gray-800 pb-4 gap-2">
-            <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-emerald-400">📊 基金实时资产看板</h1>
-            <p class="text-xs md:text-sm text-gray-400">数据更新时间：<span id="update-time" class="font-mono text-yellow-400">正在加载...</span></p>
+    <div class="max-w-7xl mx-auto">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 border-b border-gray-800 pb-4 gap-2">
+            <div>
+                <h1 class="text-2xl font-bold tracking-tight text-emerald-400">📊 个人指数化资产交易看板</h1>
+                <p class="text-xs text-gray-500 mt-1">14:30 自动截取 A 股估值，屏蔽开盘时差干扰</p>
+            </div>
+            <p class="text-xs text-gray-400 bg-gray-900 px-3 py-1.5 rounded-lg border border-gray-800">
+                系统刷新时间：<span id="update-time" class="font-mono text-yellow-400">正在同步...</span>
+            </p>
+        </div>
+
+        <div class="flex bg-gray-900 p-1 rounded-xl border border-gray-800 mb-6 max-w-md">
+            <button id="tab-est" onclick="switchPanel('estimated')" class="flex-1 text-center py-2.5 rounded-lg text-sm font-bold transition-all bg-emerald-500 text-gray-950 shadow">
+                📈 14:30 ETF 估值面板
+            </button>
+            <button id="tab-off" onclick="switchPanel('official')" class="flex-1 text-center py-2.5 rounded-lg text-sm font-medium transition-all text-gray-400 hover:text-white">
+                🏛️ 官方已公开净值看板
+            </button>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
-            <div class="bg-gray-800 p-5 md:p-6 rounded-xl border border-gray-700 shadow-lg">
-                <p class="text-gray-400 text-xs md:text-sm font-medium">当前总资产 (元)</p>
+            <div class="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl">
+                <p id="title-v" class="text-gray-400 text-xs md:text-sm font-medium">总资产评估</p>
                 <p id="total-value" class="text-2xl md:text-3xl font-bold mt-2 text-white font-mono">0.00</p>
             </div>
-            <div class="bg-gray-800 p-5 md:p-6 rounded-xl border border-gray-700 shadow-lg">
-                <p class="text-gray-400 text-xs md:text-sm font-medium">今日预计盈亏 (估算)</p>
+            <div class="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl">
+                <p id="title-d" class="text-gray-400 text-xs md:text-sm font-medium">今日预计盈亏变动</p>
                 <p id="daily-profit" class="text-2xl md:text-3xl font-bold mt-2 font-mono">0.00</p>
             </div>
-            <div class="bg-gray-800 p-5 md:p-6 rounded-xl border border-gray-700 shadow-lg">
-                <p class="text-gray-400 text-xs md:text-sm font-medium">持仓累计总盈亏</p>
+            <div class="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl">
+                <p id="title-p" class="text-gray-400 text-xs md:text-sm font-medium">持仓累计总盈亏</p>
                 <p id="total-profit" class="text-2xl md:text-3xl font-bold mt-2 font-mono">0.00</p>
             </div>
         </div>
 
-        <div class="bg-gray-800 rounded-xl border border-gray-700 shadow-lg overflow-hidden mb-8">
-            <div class="p-4 md:p-5 border-b border-gray-700 flex justify-between items-center">
-                <h2 class="text-lg md:text-xl font-semibold text-white">📈 当前持仓明细</h2>
-                <span class="text-xs text-gray-400 bg-gray-700 px-2 py-1 rounded">自动刷新中</span>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <div class="lg:col-span-2 bg-gray-900 rounded-xl border border-gray-800 shadow-xl overflow-hidden">
+                <div class="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
+                    <h2 id="table-title" class="text-base font-bold text-white">📋 持仓明细</h2>
+                    <span id="badge-mode" class="text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">A股动态联动中</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse min-w-[600px]">
+                        <thead>
+                            <tr class="bg-gray-950 text-gray-400 text-xs border-b border-gray-800">
+                                <th class="p-4">资产名称/代码</th>
+                                <th class="p-4">持仓份额</th>
+                                <th id="th-nav" class="p-4">估算净值</th>
+                                <th id="th-growth" class="p-4">今日涨跌</th>
+                                <th id="th-val" class="p-4">当前市值</th>
+                                <th id="th-prof" class="p-4">持有盈亏</th>
+                            </tr>
+                        </thead>
+                        <tbody id="position-table" class="divide-y divide-gray-800/60 text-xs md:text-sm">
+                            </tbody>
+                    </table>
+                </div>
             </div>
-            <div class="overflow-x-auto">
-                <table class="w-full text-left border-collapse min-w-[600px]">
-                    <thead>
-                        <tr class="bg-gray-750 text-gray-400 text-xs md:text-sm border-b border-gray-700">
-                            <th class="p-4">基金名称/代码</th>
-                            <th class="p-4">持仓份额</th>
-                            <th class="p-4">成本均价</th>
-                            <th class="p-4">当前估值</th>
-                            <th class="p-4">今日涨跌</th>
-                            <th class="p-4">当前市值</th>
-                            <th class="p-4">持有盈亏</th>
-                        </tr>
-                    </thead>
-                    <tbody id="position-table" class="divide-y divide-gray-700 text-xs md:text-sm">
-                        <tr><td colspan="7" class="p-4 text-center text-gray-500">正在等待云端第一次生成数据...</td></tr>
-                    </tbody>
-                </table>
+
+            <div class="bg-gray-900 rounded-xl border border-gray-800 shadow-xl overflow-hidden flex flex-col">
+                <div class="p-4 border-b border-gray-800 bg-gray-900/50">
+                    <h2 class="text-base font-bold text-white">📜 个人买卖操作明细</h2>
+                </div>
+                <div class="overflow-y-auto max-h-[500px] p-4 space-y-3" id="log-container">
+                    </div>
             </div>
+
         </div>
     </div>
 
     <script>
+        let globalData = null;
+        let currentMode = 'estimated';
+
         const defColor = (val) => val >= 0 ? 'text-rose-500' : 'text-emerald-500';
         const defSign = (val) => val >= 0 ? `+${val}` : val;
 
-        async function refreshDashboard() {
+        function switchPanel(mode) {
+            currentMode = mode;
+            const btnEst = document.getElementById('tab-est');
+            const btnOff = document.getElementById('tab-off');
+            const badge = document.getElementById('badge-mode');
+
+            if (mode === 'estimated') {
+                btnEst.className = "flex-1 text-center py-2.5 rounded-lg text-sm font-bold transition-all bg-emerald-500 text-gray-950 shadow";
+                btnOff.className = "flex-1 text-center py-2.5 rounded-lg text-sm font-medium transition-all text-gray-400 hover:text-white";
+                badge.innerText = "A股动态联动中";
+                badge.className = "text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20";
+            } else {
+                btnOff.className = "flex-1 text-center py-2.5 rounded-lg text-sm font-bold transition-all bg-emerald-500 text-gray-950 shadow";
+                btnEst.className = "flex-1 text-center py-2.5 rounded-lg text-sm font-medium transition-all text-gray-400 hover:text-white";
+                badge.innerText = "官方数据已确权";
+                badge.className = "text-xs font-semibold text-blue-400 bg-blue-500/10 px-2.5 py-0.5 rounded-full border border-blue-500/20";
+            }
+            renderUI();
+        }
+
+        async function loadData() {
             try {
                 const response = await fetch('data.json?t=' + new Date().getTime());
-                if(!response.ok) {
-                    throw new Error("等待初始化数据");
-                }
-                const data = await response.json();
+                globalData = await response.json();
+                renderUI();
+            } catch (error) {
+                console.log("正在等待云端数据同步...");
+            }
+        }
 
-                document.getElementById('update-time').innerText = data.update_time;
-                document.getElementById('total-value').innerText = data.summary.total_value.toLocaleString(undefined, {minimumFractionDigits: 2});
+        function renderUI() {
+            if (!globalData) return;
+
+            document.getElementById('update-time').innerText = globalData.update_time;
+            const tbody = document.getElementById('position-table');
+            tbody.innerHTML = '';
+
+            if (currentMode === 'estimated') {
+                const sum = globalData.summary_estimated;
+                document.getElementById('title-v').innerText = "14:30 盘中预估总资产 (元)";
+                document.getElementById('title-d').innerText = "今日盘中动态预计盈亏";
+                document.getElementById('title-p').innerText = "持仓累计预估总盈亏";
+                document.getElementById('table-title').innerText = "📋 14:30 实时估值明细表 (美股不计入波动)";
                 
-                const dailyProfitEl = document.getElementById('daily-profit');
-                dailyProfitEl.innerText = defSign(data.summary.daily_profit.toLocaleString(undefined, {minimumFractionDigits: 2}));
-                dailyProfitEl.className = `text-2xl md:text-3xl font-bold mt-2 font-mono ${defColor(data.summary.daily_profit)}`;
+                document.getElementById('th-nav').innerText = "实时估值净值";
+                document.getElementById('th-growth').innerText = "今日盘中涨跌";
+                document.getElementById('th-val').innerText = "当前预估市值";
+                document.getElementById('th-prof').innerText = "预估持有盈亏";
 
-                const totalProfitEl = document.getElementById('total-profit');
-                totalProfitEl.innerText = defSign(data.summary.total_profit.toLocaleString(undefined, {minimumFractionDigits: 2}));
-                totalProfitEl.className = `text-2xl md:text-3xl font-bold mt-2 font-mono ${defColor(data.summary.total_profit)}`;
+                document.getElementById('total-value').innerText = sum.total_value.toLocaleString(undefined, {minimumFractionDigits: 2});
+                document.getElementById('daily-profit').innerText = defSign(sum.daily_profit.toLocaleString(undefined, {minimumFractionDigits: 2}));
+                document.getElementById('daily-profit').className = `text-2xl md:text-3xl font-bold mt-2 font-mono ${defColor(sum.daily_profit)}`;
+                document.getElementById('total-profit').innerText = defSign(sum.total_profit.toLocaleString(undefined, {minimumFractionDigits: 2}));
+                document.getElementById('total-profit').className = `text-2xl md:text-3xl font-bold mt-2 font-mono ${defColor(sum.total_profit)}`;
 
-                const tbody = document.getElementById('position-table');
-                tbody.innerHTML = '';
-
-                data.positions.forEach(pos => {
+                globalData.positions.forEach(pos => {
+                    const isM = pos.daily_growth === '-';
                     const tr = document.createElement('tr');
-                    tr.className = "hover:bg-gray-700/50 transition-colors";
+                    tr.className = "hover:bg-gray-800/40 transition-colors border-b border-gray-800/40";
                     tr.innerHTML = `
-                        <td class="p-4 font-medium text-white">${pos.name}<br><span class="text-xs text-gray-500 font-mono">${pos.code}</span></td>
+                        <td class="p-4 font-semibold text-white">${pos.name}<br><span class="text-xs text-gray-500 font-mono font-normal">${pos.code}</span></td>
                         <td class="p-4 text-gray-300 font-mono">${pos.shares.toLocaleString()}</td>
-                        <td class="p-4 text-gray-300 font-mono">${pos.cost_price.toFixed(4)}</td>
-                        <td class="p-4 text-yellow-400 font-mono font-semibold">${pos.current_nav.toFixed(4)}</td>
-                        <td class="p-4 ${defColor(parseFloat(pos.daily_growth))} font-semibold font-mono">${pos.daily_growth}</td>
-                        <td class="p-4 text-white font-medium font-mono">￥${pos.value.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                        <td class="p-4 ${defColor(pos.profit)} font-semibold font-mono">￥${defSign(pos.profit.toLocaleString(undefined, {minimumFractionDigits: 2}))}</td>
+                        <td class="p-4 ${isM ? 'text-gray-400':'text-yellow-400'} font-mono font-bold">${pos.estimated_nav.toFixed(4)}</td>
+                        <td class="p-4 ${isM ? 'text-gray-400':defColor(parseFloat(pos.daily_growth))} font-bold font-mono">${pos.daily_growth}</td>
+                        <td class="p-4 text-white font-semibold font-mono">￥${pos.estimated_value.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td class="p-4 ${defColor(pos.estimated_profit)} font-bold font-mono">￥${defSign(pos.estimated_profit.toLocaleString(undefined, {minimumFractionDigits: 2}))}</td>
                     `;
                     tbody.appendChild(tr);
                 });
 
-            } catch (error) {
-                console.log(error.message);
+            } else {
+                const sum = globalData.summary_official;
+                document.getElementById('title-v').innerText = "官方公布确权总资产 (元)";
+                document.getElementById('title-d').innerText = "已公布账面单日损益";
+                document.getElementById('title-p').innerText = "账面确认累计总盈亏";
+                document.getElementById('table-title').innerText = "📋 官方已公开净值确权明细表 (全额统计)";
+                
+                document.getElementById('th-nav').innerText = "官方确认净值";
+                document.getElementById('th-growth').innerText = "官方公布涨跌";
+                document.getElementById('th-val').innerText = "官方确权市值";
+                document.getElementById('th-prof').innerText = "账面确认盈亏";
+
+                document.getElementById('total-value').innerText = sum.total_value.toLocaleString(undefined, {minimumFractionDigits: 2});
+                document.getElementById('daily-profit').innerText = defSign(sum.daily_profit.toLocaleString(undefined, {minimumFractionDigits: 2}));
+                document.getElementById('daily-profit').className = `text-2xl md:text-3xl font-bold mt-2 font-mono ${defColor(sum.daily_profit)}`;
+                document.getElementById('total-profit').innerText = defSign(sum.total_profit.toLocaleString(undefined, {minimumFractionDigits: 2}));
+                document.getElementById('total-profit').className = `text-2xl md:text-3xl font-bold mt-2 font-mono ${defColor(sum.total_profit)}`;
+
+                globalData.positions.forEach(pos => {
+                    const tr = document.createElement('tr');
+                    tr.className = "hover:bg-gray-800/40 transition-colors border-b border-gray-800/40";
+                    tr.innerHTML = `
+                        <td class="p-4 font-semibold text-white">${pos.name}<br><span class="text-xs text-gray-500 font-mono font-normal">${pos.code}</span></td>
+                        <td class="p-4 text-gray-300 font-mono">${pos.shares.toLocaleString()}</td>
+                        <td class="p-4 text-blue-400 font-mono font-bold">${pos.official_nav.toFixed(4)}</td>
+                        <td class="p-4 ${defColor(parseFloat(pos.official_growth))} font-bold font-mono">${pos.official_growth}</td>
+                        <td class="p-4 text-white font-semibold font-mono">￥${pos.official_value.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td class="p-4 ${defColor(pos.official_profit)} font-bold font-mono">￥${defSign(pos.official_profit.toLocaleString(undefined, {minimumFractionDigits: 2}))}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+
+            const logContainer = document.getElementById('log-container');
+            logContainer.innerHTML = '';
+            if (globalData.transaction_logs && globalData.transaction_logs.length > 0) {
+                globalData.transaction_logs.forEach(log => {
+                    const isBuy = log.type === '买入';
+                    const card = document.createElement('div');
+                    card.className = "bg-gray-950 p-3.5 rounded-lg border border-gray-800/80 flex flex-col gap-1.5 hover:border-gray-700 transition-colors";
+                    card.innerHTML = `
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs text-gray-400 font-mono font-medium">${log.date}</span>
+                            <span class="text-xs font-bold px-2 py-0.5 rounded ${isBuy ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}">${log.type}</span>
+                        </div>
+                        <p class="text-xs font-bold text-white tracking-wide">${log.name}</p>
+                        <div class="grid grid-cols-3 text-[11px] text-gray-400 font-mono pt-1 border-t border-gray-900 mt-0.5">
+                            <div>金额: <span class="text-white">￥${log.amount}</span></div>
+                            <div>单价: <span class="text-white">${log.price.toFixed(4)}</span></div>
+                            <div class="text-right">份额: <span class="text-white">${log.shares}</span></div>
+                        </div>
+                    `;
+                    logContainer.appendChild(card);
+                });
+            } else {
+                logContainer.innerHTML = '<p class="text-xs text-gray-500 text-center py-6">暂无近期的操作记录</p>';
             }
         }
 
-        refreshDashboard();
-        setInterval(refreshDashboard, 60000); // 每60秒刷新一次
+        loadData();
+        setInterval(loadData, 60000);
     </script>
 </body>
 </html>
