@@ -40,7 +40,7 @@ FEE_RULES = {
     }
 }
 
-CSV_FILE_NAME = "基金交易明细_转换版(1).xlsx - 交易明细.csv"
+DEFAULT_CSV_NAME = "基金交易明细_转换版(1).xlsx - 交易明细.csv"
 
 def get_market_data(fund_code, track_code):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -75,9 +75,19 @@ def parse_historical_ledger():
     tz_utc8 = timezone(timedelta(hours=8))
     total_realized_pnl = 0.0
     
-    if os.path.exists(CSV_FILE_NAME):
+    # 🌟 核心升级：全自动动态路由检索文件，解决因空格或特殊名称导致的失联故障
+    target_file = DEFAULT_CSV_NAME
+    if not os.path.exists(target_file):
+        print(f"🔍 提示：未找到标准命名的账单文件，启动全盘智能检索 fallback 机制...")
+        for file in os.listdir('.'):
+            if file.endswith('.csv') and ('交易明细' in file or '基金' in file):
+                target_file = file
+                print(f"🎯 成功捕获并自动路由至匹配账单: [{target_file}]")
+                break
+
+    if os.path.exists(target_file):
         raw_records = []
-        with open(CSV_FILE_NAME, 'r', encoding='utf-8') as f:
+        with open(target_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader: raw_records.append(row)
         raw_records.reverse()
@@ -120,6 +130,8 @@ def parse_historical_ledger():
                 realized_pnl = conf_amt - matched_cost
                 total_realized_pnl += realized_pnl
                 transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "卖出", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": round(realized_pnl, 2)})
+    else:
+        print("❌ CRITICAL ERROR: 仓库中没有找到任何合法的交易明细 .csv 文件，请检查是否已上传至根目录！")
 
     # 智能每月 10 号全自动定投扣款引擎
     today_dt = datetime.now(tz_utc8)
@@ -224,7 +236,6 @@ def update_dashboard_data():
         if total_shares <= 0: continue
         m_data = get_market_data(code, FEE_RULES[code]['track_code'])
         
-        # 精准统计持仓本金：FIFO所剩份额的真实原始投入金额（按比例结转）
         current_fund_cost = sum(lot['shares'] * (lot['amt'] / lot['org_shares']) for lot in lots)
         total_position_cost += current_fund_cost
         weighted_avg_cost = sum(lot['shares'] * lot['price'] for lot in lots) / total_shares
@@ -285,7 +296,7 @@ def update_dashboard_data():
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
     push_to_feishu(summary_est, position_list)
-    print("🎉 高级多维策略对齐版 14:30 动态清算圆满成功！")
+    print("🎉 高级防错全路由版本已完成升级，14:30 动态清算成功交割！")
 
 if __name__ == "__main__":
     update_dashboard_data()
