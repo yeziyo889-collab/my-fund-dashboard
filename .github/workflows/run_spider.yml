@@ -2,7 +2,7 @@ name: Update Fund Data
 
 on:
   schedule:
-    # 💥 每周一到周五，北京时间下午 14:30 准时自动运行
+    # 🇨🇳 北京/马来西亚时间 14:30 = 零时区 UTC 时间 06:30
     - cron: '30 6 * * 1-5'
   workflow_dispatch: # 允许手动点击运行
 
