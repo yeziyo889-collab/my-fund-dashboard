@@ -2,7 +2,7 @@ import requests
 import json
 import os
 import csv
-from datetime import datetime, timedelta, timezone
+import datetime
 
 # ====================================================
 # 🏛️ 6支国内核心资产费率规则、影子代码与自动定投计划字典
@@ -71,7 +71,9 @@ def parse_historical_ledger():
     fifo_pools = {code: [] for code in FEE_RULES.keys()}
     transaction_logs = []
     csv_dates_by_fund = {code: set() for code in FEE_RULES.keys()}
-    tz_utc8 = timezone(timedelta(hours=8))
+    
+    # 🌟 强效修复：全面统一使用最高级原生绝对定位，杜绝缩写引发的所有隐性 NameError
+    tz_utc8 = datetime.timezone(datetime.timedelta(hours=8))
     total_realized_pnl = 0.0
     diagnostic_info = "OK"
     
@@ -93,7 +95,7 @@ def parse_historical_ledger():
             target_file = csv_any[0]
             file_type = 'csv'
         else:
-            return fifo_pools, transaction_logs, total_realized_pnl, f"未检测到任何账单文件。当前文件: {str(files)}"
+            return fifo_pools, transaction_logs, total_realized_pnl, f"未检测到账单文件。当前文件: {str(files)}"
 
     raw_records = []
     if file_type == 'csv':
@@ -116,7 +118,7 @@ def parse_historical_ledger():
                     if any(r):
                         row_dict = {}
                         for k, v in zip(header, r):
-                            if isinstance(v, datetime): row_dict[k] = v.strftime("%Y-%m-%d")
+                            if isinstance(v, datetime.datetime): row_dict[k] = v.strftime("%Y-%m-%d")
                             else: row_dict[k] = str(v) if v is not None else ''
                         raw_records.append(row_dict)
         except Exception as e: diagnostic_info = f"Excel阻断: {str(e)}"
@@ -143,7 +145,7 @@ def parse_historical_ledger():
             csv_dates_by_fund[code].add(tx_date_str)
             
             try:
-                dt_obj = datetime.strptime(tx_date_str, "%Y-%m-%d").replace(tzinfo=tz_utc8)
+                dt_obj = datetime.datetime.strptime(tx_date_str, "%Y-%m-%d").replace(tzinfo=tz_utc8)
                 conf_amt = float(clean_row.get('确认金额', 0)) if clean_row.get('确认金额') else 0.0
                 conf_shares = float(clean_row.get('确认份额', 0)) if clean_row.get('确认份额') else 0.0
                 fee = float(clean_row.get('手续费', 0)) if clean_row.get('手续费') else 0.0
@@ -177,8 +179,7 @@ def parse_historical_ledger():
 
         diagnostic_info = f"成功对接账单: {target_file} (已深度清算 {valid_count} 笔历史交易)"
 
-    # 自动定投引擎触发
-    today_dt = datetime.now(tz_utc8)
+    today_dt = datetime.datetime.now(tz_utc8)
     today_str = today_dt.strftime("%Y-%m-%d")
     for code, rule in FEE_RULES.items():
         if today_dt.day == rule['dca_day'] and today_str not in csv_dates_by_fund[code]:
@@ -208,8 +209,8 @@ def calculate_target_value(lots, annual_rate, today_dt):
 def push_to_feishu(summary_est, position_list, diag_status):
     webhook_url = os.environ.get("FEISHU_WEBHOOK")
     if not webhook_url: return
-    tz_utc8 = timezone(timedelta(hours=8))
-    time_str = datetime.now(tz_utc8).strftime("%m-%d %H:%M")
+    tz_utc8 = datetime.timezone(datetime.timedelta(hours=8))
+    time_str = datetime.datetime.now(tz_utc8).strftime("%m-%d %H:%M")
     is_profit = summary_est['daily_profit'] >= 0
     header_template = "green" if is_profit else "red"
     position_list.sort(key=lambda x: x['daily_growth_raw'], reverse=True)
@@ -280,9 +281,8 @@ def push_to_feishu(summary_est, position_list, diag_status):
     except Exception as e: print("飞书推送异常:", e)
 
 def update_dashboard_data():
-    # 🌟 强效修复：显式强行注入北京/马来西亚时区，确保全剧变量绝对安全，彻底消灭 NameError
-    tz_utc8 = timezone(timedelta(hours=8))
-    today_dt = datetime.now(tz_utc8)
+    tz_utc8 = datetime.timezone(datetime.timedelta(hours=8))
+    today_dt = datetime.datetime.now(tz_utc8)
     fifo_pools, transaction_logs, total_realized_pnl, diag_status = parse_historical_ledger()
     
     total_dca_pool_amt = sum(r['dca_amount'] for r in FEE_RULES.values())
@@ -295,7 +295,6 @@ def update_dashboard_data():
         if total_shares <= 0: continue
         m_data = get_market_data(code, FEE_RULES[code]['track_code'])
         
-        # 统一使用保本毛本金口径进行精准计算
         current_fund_cost = sum(lot['amt'] for lot in lots)
         total_position_cost += current_fund_cost
         gross_cost_price = current_fund_cost / total_shares
@@ -360,7 +359,7 @@ def update_dashboard_data():
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
     push_to_feishu(summary_est, position_list, diag_status)
-    print("🎉 歧义全面校正，卡片精修渲染成功！")
+    print("🎉 最终语法死锁完美清空，卡片全量渲染成功！")
 
 if __name__ == "__main__":
     update_dashboard_data()
