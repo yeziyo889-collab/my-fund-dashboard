@@ -40,8 +40,6 @@ FEE_RULES = {
     }
 }
 
-DEFAULT_CSV_NAME = "基金交易明细_转换版(1).xlsx - 交易明细.csv"
-
 def get_market_data(fund_code, track_code):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     official_nav, official_yesterday_nav, daily_growth = 1.0, 1.0, 0.0
@@ -76,75 +74,109 @@ def parse_historical_ledger():
     total_realized_pnl = 0.0
     diagnostic_info = "OK"
     
-    # 🌟 智能全盘搜索匹配
-    target_file = DEFAULT_CSV_NAME
-    if not os.path.exists(target_file):
-        found = False
-        for file in os.listdir('.'):
-            if file.endswith('.csv') and ('交易明细' in file or '基金' in file or 'csv' in file.lower()):
-                target_file = file
-                found = True
-                break
-        if not found:
-            # 雷达触达：记录当前GitHub服务器下所有文件名，原样返回供飞书透出
-            diagnostic_info = f"未找到任何CSV文件。当前目录有: {str(os.listdir('.'))}"
+    files = os.listdir('.')
+    csv_candidates = [f for f in files if f.endswith('.csv') and ('明细' in f or '基金' in f or '账单' in f)]
+    xlsx_candidates = [f for f in files if f.endswith('.xlsx') and ('明细' in f or '基金' in f) and not f.startswith('~')]
+    
+    target_file = None
+    file_type = None
+    
+    if csv_candidates:
+        target_file = csv_candidates[0]
+        file_type = 'csv'
+    elif xlsx_candidates:
+        target_file = xlsx_candidates[0]
+        file_type = 'xlsx'
+    else:
+        csv_any = [f for f in files if f.endswith('.csv')]
+        if csv_any:
+            target_file = csv_any[0]
+            file_type = 'csv'
+        else:
+            diagnostic_info = f"探测失败。当前目录文件: {str(files)}"
+            return fifo_pools, transaction_logs, total_realized_pnl, diagnostic_info
 
-    if os.path.exists(target_file) and diagnostic_info == "OK":
-        raw_records = []
-        # 🌟 多重编码自适应盲测读取
+    raw_records = []
+    if file_type == 'csv':
         for enc in ['utf-8-sig', 'utf-8', 'gbk']:
             try:
                 with open(target_file, 'r', encoding=enc) as f:
                     reader = csv.DictReader(f)
                     raw_records = list(reader)
-                    if raw_records and '基金代码' in raw_records[0]:
-                        break
+                    if raw_records: break
+            except Exception: continue
+    elif file_type == 'xlsx':
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(target_file, data_only=True)
+            sheet = wb.active
+            rows = list(sheet.iter_rows(values_only=True))
+            if rows:
+                header = [str(i).strip() if i else '' for i in rows[0]]
+                for r in rows[1:]:
+                    if any(r):
+                        row_dict = {}
+                        for k, v in zip(header, r):
+                            if isinstance(v, datetime): row_dict[k] = v.strftime("%Y-%m-%d")
+                            else: row_dict[k] = str(v) if v is not None else ''
+                        raw_records.append(row_dict)
+        except Exception as e:
+            diagnostic_info = f"Excel阻断: {str(e)}"
+
+    if not raw_records and diagnostic_info == "OK":
+        diagnostic_info = f"账单 [{target_file}] 解析行为空。"
+    else:
+        raw_records.reverse()
+        detected_keys = [str(k).strip().replace('\ufeff', '') for k in raw_records[0].keys() if k] if raw_records else []
+        
+        valid_count = 0
+        for row in raw_records:
+            # 🌟 终极去噪器：强行对整行数据的所有 Key 和 Value 去除前后空格、不可见字符和 BOM 乱码
+            clean_row = {str(k).strip().replace('\ufeff', ''): str(v).strip() for k, v in row.items() if k}
+            
+            code = clean_row.get('基金代码', '')
+            if not code: continue
+            code = code.split('.')[0].zfill(6)
+            if code not in FEE_RULES: continue
+            
+            tx_date_str = clean_row.get('交易日期', '').replace('/', '-').split(' ')[0]
+            tx_type = clean_row.get('交易类型', '')
+            csv_dates_by_fund[code].add(tx_date_str)
+            
+            try:
+                dt_obj = datetime.strptime(tx_date_str, "%Y-%m-%d").replace(tzinfo=tz_utc8)
+                conf_amt = float(clean_row.get('确认金额', 0)) if clean_row.get('确认金额') else 0.0
+                conf_shares = float(clean_row.get('确认份额', 0)) if clean_row.get('确认份额') else 0.0
+                fee = float(clean_row.get('手续费', 0)) if clean_row.get('手续费') else 0.0
             except Exception: continue
 
-        if not raw_records:
-            diagnostic_info = f"文件 [{target_file}] 读取失败或表头格式不匹配。"
-        else:
-            raw_records.reverse()
-            for row in raw_records:
-                code = row.get('基金代码', '')
-                if not code: continue
-                code = code.strip().zfill(6)
-                if code not in FEE_RULES: continue
-                tx_date_str = row.get('交易日期', '').strip().replace('/', '-')
-                tx_type = row.get('交易类型', '').strip()
-                csv_dates_by_fund[code].add(tx_date_str)
-                
-                try:
-                    dt_obj = datetime.strptime(tx_date_str, "%Y-%m-%d").replace(tzinfo=tz_utc8)
-                    conf_amt = float(row['确认金额']) if row['确认金额'] else 0.0
-                    conf_shares = float(row['确认份额']) if row['确认份额'] else 0.0
-                    fee = float(row['手续费']) if row['手续费'] else 0.0
-                except (ValueError, KeyError, TypeError): continue
+            if conf_shares <= 0: continue
+            valid_count += 1
 
-                if conf_shares <= 0: continue
+            if "买入" in tx_type or "定投" in tx_type:
+                calced_nav = (conf_amt - fee) / conf_shares
+                fifo_pools[code].append({"dt": dt_obj, "shares": conf_shares, "price": calced_nav, "amt": conf_amt, "type": tx_type, "org_shares": conf_shares})
+                transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "买入", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": 0.0})
+            elif "卖出" in tx_type or "赎回" in tx_type:
+                calced_nav = (conf_amt + fee) / conf_shares
+                shares_to_deduct = conf_shares
+                matched_cost = 0.0
+                while shares_to_deduct > 0 and fifo_pools[code]:
+                    oldest = fifo_pools[code][0]
+                    if oldest['shares'] <= shares_to_deduct:
+                        matched_cost += oldest['shares'] * oldest['price']
+                        shares_to_deduct -= oldest['shares']
+                        fifo_pools[code].pop(0)
+                    else:
+                        matched_cost += shares_to_deduct * oldest['price']
+                        oldest['amt'] *= (oldest['shares'] - shares_to_deduct) / oldest['shares']
+                        oldest['shares'] -= shares_to_deduct
+                        shares_to_deduct = 0
+                realized_pnl = conf_amt - matched_cost
+                total_realized_pnl += realized_pnl
+                transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "卖出", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": round(realized_pnl, 2)})
 
-                if "买入" in tx_type or "定投" in tx_type:
-                    calced_nav = (conf_amt - fee) / conf_shares
-                    fifo_pools[code].append({"dt": dt_obj, "shares": conf_shares, "price": calced_nav, "amt": conf_amt, "type": tx_type, "org_shares": conf_shares})
-                    transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "买入", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": 0.0})
-                elif "卖出" in tx_type or "赎回" in tx_type:
-                    calced_nav = (conf_amt + fee) / conf_shares
-                    shares_to_deduct = conf_shares
-                    matched_cost = 0.0
-                    while shares_to_deduct > 0 and fifo_pools[code]:
-                        oldest = fifo_pools[code][0]
-                        if oldest['shares'] <= shares_to_deduct:
-                            matched_cost += oldest['shares'] * oldest['price']
-                            shares_to_deduct -= oldest['shares']
-                            fifo_pools[code].pop(0)
-                        else:
-                            matched_cost += shares_to_deduct * oldest['price']
-                            oldest['amt'] *= (oldest['shares'] - shares_to_deduct) / oldest['shares']
-                            oldest['shares'] -= shares_to_deduct
-                            shares_to_deduct = 0
-                    realized_pnl = conf_amt - matched_cost
-                    total_realized_pnl += realized_pnl
-                    transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "卖出", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": round(realized_pnl, 2)})
+        diagnostic_info = f"成功读取: {target_file} (清洗后有效交易: {valid_count} 条，识别表头: {str(detected_keys)})"
 
     # 智能每月 10 号全自动定投扣款引擎
     today_dt = datetime.now(tz_utc8)
@@ -225,7 +257,7 @@ def push_to_feishu(summary_est, position_list, diag_status):
                 {"tag": "hr"},
                 {
                     "tag": "div",
-                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板 (按涨幅降序)**:\n{detail_md if detail_md else '⚠️ 暂无有效持仓明细（请核对下方雷达诊断）\n'}"}
+                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板 (按涨幅降序)**:\n{detail_md if detail_md else '⚠️ 暂无有效持仓明细\n'}"}
                 },
                 {
                     "tag": "note",
@@ -312,7 +344,7 @@ def update_dashboard_data():
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
     push_to_feishu(summary_est, position_list, diag_status)
-    print("🎉 防错诊断雷达版已部署！")
+    print("🎉 全强健去噪版清算完毕！")
 
 if __name__ == "__main__":
     update_dashboard_data()
