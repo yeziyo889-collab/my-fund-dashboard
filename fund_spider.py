@@ -1,7 +1,7 @@
 import requests
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # ====================================================
 # 💰 你的 8 支指数化基金持仓配置
@@ -17,7 +17,7 @@ MY_POSITIONS = {
     "009051": {"name": "易方达中证红利ETF联接A", "track_code": "sh515180", "shares": 10000.0, "cost_price": 1.1000, "is_domestic": True}
 }
 
-TRANSACTION_LOGS = [] # 历史明细留空
+TRANSACTION_LOGS = [] # 历史交易明细留空
 
 def get_data(fund_code, track_code, is_domestic):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -25,20 +25,31 @@ def get_data(fund_code, track_code, is_domestic):
     official_yesterday_nav = 1.0
     daily_growth = 0.0
 
+    # 1. 🌟 智能扫描场外官方已公开的有效最新净值（彻底解决白天挂零问题）
     try:
         url_jj = f"http://qt.gtimg.cn/q=jj{fund_code}"
         res_jj = requests.get(url_jj, headers=headers, timeout=5)
         res_jj.encoding = 'gbk'
         if '~' in res_jj.text:
             parts = res_jj.text.split('"')[1].split('~')
-            if len(parts) >= 3: official_nav = float(parts[2])
-            if len(parts) >= 5:
-                try: official_yesterday_nav = float(parts[4])
-                except ValueError: official_yesterday_nav = official_nav
-            else: official_yesterday_nav = official_nav
+            
+            # 采用非零滑窗扫描机制，自动滤除白天未确权的 0.0000 占位符
+            valid_navs = []
+            for p in parts[2:]:
+                try:
+                    val = float(p)
+                    if 0.1 < val < 100.0: # 过滤掉代码、日期、大额异动等杂质
+                        valid_navs.append(val)
+                except ValueError:
+                    continue
+            
+            if len(valid_navs) >= 1:
+                official_nav = valid_navs[0] # 获取最新的有效确权净值
+                official_yesterday_nav = valid_navs[1] if len(valid_navs) >= 2 else official_nav
     except Exception as e:
-        print(f"场外解析异常 {fund_code}: {e}")
+        print(f"⚠️ 场外官方数据解析提示 ({fund_code}): {e}")
 
+    # 2. 🌟 精准校准场内影子 ETF 盘中实时涨跌幅
     if is_domestic:
         try:
             url_stock = f"http://qt.gtimg.cn/q={track_code}"
@@ -46,49 +57,51 @@ def get_data(fund_code, track_code, is_domestic):
             res_stock.encoding = 'gbk'
             if '~' in res_stock.text:
                 parts = res_stock.text.split('"')[1].split('~')
-                current_price = float(parts[2])
-                yesterday_close = float(parts[3])
-                if yesterday_close > 0:
-                    daily_growth = ((current_price - yesterday_close) / yesterday_close) * 100
+                if len(parts) >= 5:
+                    # ✨ 修正对齐：parts[3]是实时价格，parts[4]是昨日收盘价
+                    current_price = float(parts[3])
+                    yesterday_close = float(parts[4])
+                    if yesterday_close > 0:
+                        daily_growth = ((current_price - yesterday_close) / yesterday_close) * 100
         except Exception as e:
-            print(f"场内同步异常 {track_code}: {e}")
+            print(f"⚠️ 场内影子网路同步提示 ({track_code}): {e}")
     else:
         daily_growth = 0.0
 
     estimated_nav = official_nav * (1 + daily_growth / 100)
-    return {"official_nav": official_nav, "official_yesterday_nav": official_yesterday_nav, "estimated_nav": estimated_nav, "daily_growth": daily_growth}
+    return {
+        "official_nav": official_nav, 
+        "official_yesterday_nav": official_yesterday_nav, 
+        "estimated_nav": estimated_nav, 
+        "daily_growth": daily_growth
+    }
 
-# 👑 飞书高保真智能卡片发送引擎
 def push_to_feishu(summary_est, position_list):
     webhook_url = os.environ.get("FEISHU_WEBHOOK")
     if not webhook_url:
-        print("⚠️ 未检测到 FEISHU_WEBHOOK 密钥，跳过推送。")
+        print("⚠️ 未检测到加密密钥，跳过飞书推送流程。")
         return
 
-    time_str = datetime.now().strftime("%m-%d %H:%M")
+    # ⏱️ ✨ 修正对齐：强行将服务器时区锁定为亚洲/上海东八区标准时间
+    tz_utc8 = timezone(timedelta(hours=8))
+    time_str = datetime.now(tz_utc8).strftime("%m-%d %H:%M")
+    
     is_profit = summary_est['daily_profit'] >= 0
     sign_dp = "+" if is_profit else ""
-    
-    # 🎨 赚了亮红(red)，亏了披绿(green)
     header_template = "red" if is_profit else "green"
     
     detail_md = ""
     for pos in position_list:
         if pos['is_domestic']:
             g_icon = "🔺" if "-" not in pos['daily_growth'] and pos['daily_growth'] != "0.0%" else "🔻"
-            detail_md += f"{g_icon} **{pos['name']}**\n └ 涨跌: `{pos['daily_growth']}` | 市值: `￥{pos['estimated_value']:,.0f}`\n"
+            detail_md += f"{g_icon} **{pos['name']}**\n └ 盘中涨跌: `{pos['daily_growth']}` | 最新市值: `￥{pos['estimated_value']:,.0f}`\n"
 
     payload = {
         "msg_type": "interactive",
         "card": {
-            "config": {
-                "wide_screen_mode": True
-            },
+            "config": {"wide_screen_mode": True},
             "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": "📊 14:30 盘中资产动态快报"
-                },
+                "title": {"tag": "plain_text", "content": "📊 14:30 盘中资产动态快报"},
                 "template": header_template
             },
             "elements": [
@@ -96,27 +109,17 @@ def push_to_feishu(summary_est, position_list):
                     "tag": "div",
                     "text": {
                         "tag": "lark_md",
-                        "content": f"⏱️ **同步时间**: `{time_str}`\n\n💰 **资产核心总览**:\n• 预估总资产: **￥{summary_est['total_value']:,.2f}**\n• 今日预计损益: **{sign_dp}{summary_est['daily_profit']:,.2f}**"
+                        "content": f"⏱️ **同步时间**: `{time_str}` (北京/马来西亚标准时间)\n\n💰 **资产核心总览**:\n• 预估总资产: **￥{summary_est['total_value']:,.2f}**\n• 今日预计损益: **{sign_dp}{summary_est['daily_profit']:,.2f}**"
                     }
                 },
-                {
-                    "tag": "hr"
-                },
+                {"tag": "hr"},
                 {
                     "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"📋 **A股标的实时估值明细**:\n{detail_md}"
-                    }
+                    "text": {"tag": "lark_md", "content": f"📋 **A股持仓实时估值明细**:\n{detail_md}"}
                 },
                 {
                     "tag": "note",
-                    "elements": [
-                        {
-                            "tag": "plain_text",
-                            "content": "💡 提示：美股QDII标的时差已在盘中推送中自动隐藏"
-                        }
-                    ]
+                    "elements": [{"tag": "plain_text", "content": "💡 提示：美股QDII标的时差已在14:30推送中自动隐藏"}]
                 }
             ]
         }
@@ -180,9 +183,8 @@ def update_dashboard_data():
     with open('data.json', 'w', encoding='utf-8') as f:
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
-    # ✨ 修正点：这里已经完美切换为飞书发信引擎
     push_to_feishu(summary_est, position_list)
-    print("🎉 飞书高保真卡片数据处理完毕！")
+    print("🎉 飞书全链路自动化交割顺利通关！")
 
 if __name__ == "__main__":
     update_dashboard_data()
