@@ -49,13 +49,11 @@ def get_market_data(fund_code, track_code):
         res_jj.encoding = 'gbk'
         if '~' in res_jj.text:
             parts = res_jj.text.split('"')[1].split('~')
-            # 🌟 修复一：直接提取确定性索引，绝不通扫带有日期的 trailing fields，彻底免疫 ValueError
             if len(parts) >= 4:
                 try:
                     official_nav = float(parts[2])
                     official_yesterday_nav = float(parts[3])
-                except ValueError:
-                    pass
+                except ValueError: pass
     except Exception as e: print(f"⚠️ 行情接口异常 ({fund_code}): {e}")
 
     try:
@@ -83,7 +81,6 @@ def parse_historical_ledger():
     
     target_file = None
     file_type = None
-    
     if csv_candidates:
         target_file = csv_candidates[0]
         file_type = 'csv'
@@ -96,8 +93,7 @@ def parse_historical_ledger():
             target_file = csv_any[0]
             file_type = 'csv'
         else:
-            diagnostic_info = f"探测失败。当前目录文件: {str(files)}"
-            return fifo_pools, transaction_logs, total_realized_pnl, diagnostic_info
+            return fifo_pools, transaction_logs, total_realized_pnl, f"未检测到任何账单文件。当前文件: {str(files)}"
 
     raw_records = []
     if file_type == 'csv':
@@ -123,19 +119,15 @@ def parse_historical_ledger():
                             if isinstance(v, datetime): row_dict[k] = v.strftime("%Y-%m-%d")
                             else: row_dict[k] = str(v) if v is not None else ''
                         raw_records.append(row_dict)
-        except Exception as e:
-            diagnostic_info = f"Excel阻断: {str(e)}"
+        except Exception as e: diagnostic_info = f"Excel阻断: {str(e)}"
 
     if not raw_records and diagnostic_info == "OK":
-        diagnostic_info = f"账单 [{target_file}] 解析行为空。"
+        diagnostic_info = f"账单 [{target_file}] 解析为空。"
     else:
         raw_records.reverse()
-        detected_keys = [str(k).strip().replace('\ufeff', '') for k in raw_records[0].keys() if k] if raw_records else []
-        
         valid_count = 0
         for row in raw_records:
             clean_row = {str(k).strip().replace('\ufeff', ''): str(v).strip() for k, v in row.items() if k}
-            
             code = clean_row.get('基金代码', '')
             if not code: continue
             code = code.split('.')[0].zfill(6)
@@ -145,8 +137,7 @@ def parse_historical_ledger():
             date_parts = raw_tx_date.split('-')
             if len(date_parts) == 3:
                 tx_date_str = f"{date_parts[0].strip()}-{date_parts[1].strip().zfill(2)}-{date_parts[2].strip().zfill(2)}"
-            else:
-                tx_date_str = raw_tx_date
+            else: tx_date_str = raw_tx_date
                 
             tx_type = clean_row.get('交易类型', '')
             csv_dates_by_fund[code].add(tx_date_str)
@@ -184,9 +175,9 @@ def parse_historical_ledger():
                 total_realized_pnl += realized_pnl
                 transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "卖出", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": round(realized_pnl, 2)})
 
-        diagnostic_info = f"成功读取: {target_file} (清洗后有效交易: {valid_count} 条)"
+        diagnostic_info = f"成功对接账单: {target_file} (已深度清算 {valid_count} 笔历史交易)"
 
-    # 自动定投机制
+    # 自动定投引擎触发
     today_dt = datetime.now(tz_utc8)
     today_str = today_dt.strftime("%Y-%m-%d")
     for code, rule in FEE_RULES.items():
@@ -232,11 +223,20 @@ def push_to_feishu(summary_est, position_list, diag_status):
         elif -0.5 <= val <= 0.0: g_icon = "🍂"
         elif -1.5 <= val < -0.5: g_icon = "🍎"
         else: g_icon = "🔴"
-        detail_md += f"{g_icon} **{pos['name']}** (`{pos['code']}`)\n ├ 盘中涨跌：`{pos['daily_growth']}` | **预计收益**：**￥{pos['estimated_daily_profit']:,.2f}**\n ├ 目标差额：`￥{pos['value_difference']:,.2f}` | 实际权重：`{pos['actual_weight']}%` (偏离 `{pos['weight_diff']:+.2f}%`)\n └ 当前实际价值：`￥{pos['estimated_value']:,.0f}`\n\n"
+        
+        sign_cum = "+" if pos['accumulated_pnl'] >= 0 else ""
+        detail_md += (
+            f"{g_icon} **{pos['name']}** (`{pos['code']}`)\n"
+            f" ├ ⚡ 今日盘中：`{pos['daily_growth']}` | 今日预估损益：**￥{pos['estimated_daily_profit']:+.2f}**\n"
+            f" ├ 💎 持仓账本：当前市值 `￥{pos['estimated_value']:,.0f}` | 累计总盈亏：**{sign_cum}￥{pos['accumulated_pnl']:,.2f}** (保本均价 `￥{pos['cost_price']:.4f}`)\n"
+            f" ├ 🎯 配置动态：实际权重 `{pos['actual_weight']}%` (偏离 `{pos['weight_diff']:+.2f}%`)\n"
+            f" └ 📊 目标观测：距复利目标差额 `￥{pos['value_difference']:,.2f}`\n\n"
+        )
 
     sign_diff = "+" if summary_est['total_diff'] >= 0 else ""
     sign_dp = "+" if summary_est['daily_profit'] >= 0 else ""
     sign_rp = "+" if summary_est['realized_pnl'] >= 0 else ""
+    sign_total_cum = "+" if summary_est['total_cum_pnl'] >= 0 else ""
 
     payload = {
         "msg_type": "interactive",
@@ -254,22 +254,24 @@ def push_to_feishu(summary_est, position_list, diag_status):
                         "content": (
                             f"⏱️ **同步时间**: `{time_str}` (北京/马来西亚时间)\n\n"
                             f"💳 **资产账户总览**:\n"
-                            f"• 当前持仓本金: **￥{summary_est['total_position_cost']:,.2f}** (含定投与手动买入)\n"
-                            f"• 今日总预计损益: **{sign_dp}￥{summary_est['daily_profit']:,.2f}**\n"
-                            f"• 累计已实现损益: **{sign_rp}￥{summary_est['realized_pnl']:,.2f}**\n"
-                            f"• 目标与实际价值总差额: **{sign_diff}{summary_est['total_diff_pct']:.2f}%**\n"
-                            f"• 总体配置阵型总偏离度: **{summary_est['total_weight_deviation']:.2f}%**"
+                            f"• 当前持仓总市值: **￥{summary_est['total_value']:,.2f}** (实时清算估值)\n"
+                            f"• 当前持仓总本金: **￥{summary_est['total_position_cost']:,.2f}** (已投入存量本金)\n"
+                            f"• **持仓累计总盈亏**: **{sign_total_cum}￥{summary_est['total_cum_pnl']:,.2f}** ({summary_est['total_cum_pnl_pct']:+.2f}%)\n"
+                            f"• 今日盘中总预估损益: **{sign_dp}￥{summary_est['daily_profit']:,.2f}**\n"
+                            f"• 历史累计已实现损益: **{sign_rp}￥{summary_est['realized_pnl']:,.2f}**\n"
+                            f"• 整体配置阵型总偏离度: **{summary_est['total_weight_deviation']:.2f}%**\n"
+                            f"• 实际市值与复利目标总差额: **{sign_diff}{summary_est['total_diff_pct']:.2f}%**"
                         )
                     }
                 },
                 {"tag": "hr"},
                 {
                     "tag": "div",
-                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板 (按涨幅降序)**:\n{detail_md if detail_md else '⚠️ 暂无有效持仓明细\n'}"}
+                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板 (按盘中涨幅降序)**:\n{detail_md if detail_md else '⚠️ 暂无持仓资产明细\n'}"}
                 },
                 {
                     "tag": "note",
-                    "elements": [{"tag": "plain_text", "content": f"📡 云端雷达诊断状态: {diag_status}"}]
+                    "elements": [{"tag": "plain_text", "content": f"📡 生产运行数据源状态: {diag_status}"}]
                 }
             ]
         }
@@ -292,18 +294,18 @@ def update_dashboard_data():
         if total_shares <= 0: continue
         m_data = get_market_data(code, FEE_RULES[code]['track_code'])
         
-        # 🌟 修复二：lot['amt']已经是按比例扣减后的净存量本金，直接累加求和即可，拒绝二次比例计算
+        # 统一使用保本毛本金口径进行精准计算
         current_fund_cost = sum(lot['amt'] for lot in lots)
         total_position_cost += current_fund_cost
-        weighted_avg_cost = sum(lot['shares'] * lot['price'] for lot in lots) / total_shares
+        gross_cost_price = current_fund_cost / total_shares
         
         target_val = calculate_target_value(lots, FEE_RULES[code]['target_annual_rate'], today_dt)
         est_val = total_shares * m_data['estimated_nav']
         total_actual_value += est_val
         
         raw_position_data[code] = {
-            "lots": lots, "m_data": m_data, "shares": total_shares, "cost_price": weighted_avg_cost,
-            "target_val": target_val, "est_val": est_val
+            "lots": lots, "m_data": m_data, "shares": total_shares, "cost_price": gross_cost_price,
+            "target_val": target_val, "est_val": est_val, "gross_cost": current_fund_cost
         }
 
     position_list = []
@@ -323,9 +325,9 @@ def update_dashboard_data():
         total_weight_deviation += abs(weight_diff)
         
         position_list.append({
-            "code": code, "name": FEE_RULES[code]['name'], "shares": round(p_data['shares'], 2), "cost_price": round(p_data['cost_price'], 4),
+            "code": code, "name": FEE_RULES[code]['name'], "shares": round(p_data['shares'], 2), "cost_price": p_data['cost_price'],
             "estimated_nav": round(m_data['estimated_nav'], 4), "daily_growth": f"{round(m_data['daily_growth'], 2)}%", "daily_growth_raw": m_data['daily_growth'],
-            "estimated_value": round(p_data['est_val'], 2), "estimated_profit": round(p_data['est_val'] - (p_data['shares'] * p_data['cost_price']), 2),
+            "estimated_value": round(p_data['est_val'], 2), "accumulated_pnl": round(p_data['est_val'] - p_data['gross_cost'], 2),
             "estimated_daily_profit": round(est_day_prof, 2), "target_value": round(p_data['target_val'], 2),
             "value_difference": round(diff, 2), "actual_weight": round(act_weight, 2), "expected_weight": round(exp_weight, 2),
             "weight_diff": weight_diff
@@ -333,6 +335,8 @@ def update_dashboard_data():
 
     total_target_value = total_actual_value + total_diff
     total_diff_pct = (total_diff / total_target_value) * 100 if total_target_value > 0 else 0.0
+    total_cum_pnl = total_actual_value - total_position_cost
+    total_cum_pnl_pct = (total_cum_pnl / total_position_cost) * 100 if total_position_cost > 0 else 0.0
 
     summary_est = {
         "total_value": round(total_actual_value, 2), 
@@ -341,7 +345,9 @@ def update_dashboard_data():
         "realized_pnl": round(total_realized_pnl, 2),
         "total_diff": round(total_diff, 2),
         "total_diff_pct": total_diff_pct,
-        "total_weight_deviation": round(total_weight_deviation, 2)
+        "total_weight_deviation": round(total_weight_deviation, 2),
+        "total_cum_pnl": total_cum_pnl,
+        "total_cum_pnl_pct": total_cum_pnl_pct
     }
     
     dashboard_data = {
@@ -353,7 +359,7 @@ def update_dashboard_data():
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
     push_to_feishu(summary_est, position_list, diag_status)
-    print("🎉 最终满血全自适应无错版本清算完毕！")
+    print("🎉 歧义全面校正，卡片精修渲染成功！")
 
 if __name__ == "__main__":
     update_dashboard_data()
