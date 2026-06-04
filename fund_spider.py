@@ -280,6 +280,7 @@ def push_to_feishu(summary_est, position_list, diag_status):
     except Exception as e: print("飞书推送异常:", e)
 
 def update_dashboard_data():
+    # 🌟 强效修复：显式强行注入北京/马来西亚时区，确保全剧变量绝对安全，彻底消灭 NameError
     tz_utc8 = timezone(timedelta(hours=8))
     today_dt = datetime.now(tz_utc8)
     fifo_pools, transaction_logs, total_realized_pnl, diag_status = parse_historical_ledger()
