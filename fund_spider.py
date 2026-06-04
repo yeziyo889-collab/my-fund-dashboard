@@ -75,8 +75,8 @@ def parse_historical_ledger():
     diagnostic_info = "OK"
     
     files = os.listdir('.')
-    csv_candidates = [f for f in files if f.endswith('.csv') and ('明细' in f or '基金' in f or '账单' in f)]
-    xlsx_candidates = [f for f in files if f.endswith('.xlsx') and ('明细' in f or '基金' in f) and not f.startswith('~')]
+    csv_candidates = [f for f in files if f.lower().endswith('.csv') and any(k in f for k in ['明细', '基金', '账单', 'csv'])]
+    xlsx_candidates = [f for f in files if f.lower().endswith('.xlsx') and any(k in f for k in ['明细', '基金']) and not f.startswith('~')]
     
     target_file = None
     file_type = None
@@ -88,7 +88,7 @@ def parse_historical_ledger():
         target_file = xlsx_candidates[0]
         file_type = 'xlsx'
     else:
-        csv_any = [f for f in files if f.endswith('.csv')]
+        csv_any = [f for f in files if f.lower().endswith('.csv')]
         if csv_any:
             target_file = csv_any[0]
             file_type = 'csv'
@@ -130,8 +130,8 @@ def parse_historical_ledger():
         detected_keys = [str(k).strip().replace('\ufeff', '') for k in raw_records[0].keys() if k] if raw_records else []
         
         valid_count = 0
+        error_sample = ""
         for row in raw_records:
-            # 🌟 终极去噪器：强行对整行数据的所有 Key 和 Value 去除前后空格、不可见字符和 BOM 乱码
             clean_row = {str(k).strip().replace('\ufeff', ''): str(v).strip() for k, v in row.items() if k}
             
             code = clean_row.get('基金代码', '')
@@ -139,7 +139,15 @@ def parse_historical_ledger():
             code = code.split('.')[0].zfill(6)
             if code not in FEE_RULES: continue
             
-            tx_date_str = clean_row.get('交易日期', '').replace('/', '-').split(' ')[0]
+            raw_tx_date = clean_row.get('交易日期', '').replace('/', '-').split(' ')[0]
+            
+            # 🌟 核心升级：智能自适应补零校准器（彻底解决个位数月份/日期引发的过滤断层）
+            date_parts = raw_tx_date.split('-')
+            if len(date_parts) == 3:
+                tx_date_str = f"{date_parts[0].strip()}-{date_parts[1].strip().zfill(2)}-{date_parts[2].strip().zfill(2)}"
+            else:
+                tx_date_str = raw_tx_date
+                
             tx_type = clean_row.get('交易类型', '')
             csv_dates_by_fund[code].add(tx_date_str)
             
@@ -148,7 +156,9 @@ def parse_historical_ledger():
                 conf_amt = float(clean_row.get('确认金额', 0)) if clean_row.get('确认金额') else 0.0
                 conf_shares = float(clean_row.get('确认份额', 0)) if clean_row.get('确认份额') else 0.0
                 fee = float(clean_row.get('手续费', 0)) if clean_row.get('手续费') else 0.0
-            except Exception: continue
+            except Exception as e: 
+                error_sample = str(e)
+                continue
 
             if conf_shares <= 0: continue
             valid_count += 1
@@ -176,9 +186,11 @@ def parse_historical_ledger():
                 total_realized_pnl += realized_pnl
                 transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "卖出", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": round(realized_pnl, 2)})
 
-        diagnostic_info = f"成功读取: {target_file} (清洗后有效交易: {valid_count} 条，识别表头: {str(detected_keys)})"
+        diagnostic_info = f"成功读取: {target_file} (清洗后有效交易: {valid_count} 条)"
+        if valid_count == 0 and error_sample:
+            diagnostic_info += f" 报错样例: {error_sample}"
 
-    # 智能每月 10 号全自动定投扣款引擎
+    # 智能全自动模拟定投
     today_dt = datetime.now(tz_utc8)
     today_str = today_dt.strftime("%Y-%m-%d")
     for code, rule in FEE_RULES.items():
@@ -344,7 +356,7 @@ def update_dashboard_data():
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
     push_to_feishu(summary_est, position_list, diag_status)
-    print("🎉 全强健去噪版清算完毕！")
+    print("🎉 全局自适应纠偏清洗完毕！")
 
 if __name__ == "__main__":
     update_dashboard_data()
