@@ -17,7 +17,7 @@ MY_POSITIONS = {
     "009051": {"name": "易方达中证红利ETF联接A", "track_code": "sh515180", "shares": 10000.0, "cost_price": 1.1000, "is_domestic": True}
 }
 
-TRANSACTION_LOGS = [] # 历史交易明细留空
+TRANSACTION_LOGS = [] # 个人买卖记录留空
 
 def get_data(fund_code, track_code, is_domestic):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -25,7 +25,6 @@ def get_data(fund_code, track_code, is_domestic):
     official_yesterday_nav = 1.0
     daily_growth = 0.0
 
-    # 1. 🌟 智能扫描场外官方已公开的有效最新净值（彻底解决白天挂零问题）
     try:
         url_jj = f"http://qt.gtimg.cn/q=jj{fund_code}"
         res_jj = requests.get(url_jj, headers=headers, timeout=5)
@@ -33,23 +32,21 @@ def get_data(fund_code, track_code, is_domestic):
         if '~' in res_jj.text:
             parts = res_jj.text.split('"')[1].split('~')
             
-            # 采用非零滑窗扫描机制，自动滤除白天未确权的 0.0000 占位符
             valid_navs = []
             for p in parts[2:]:
                 try:
                     val = float(p)
-                    if 0.1 < val < 100.0: # 过滤掉代码、日期、大额异动等杂质
+                    if 0.1 < val < 100.0:
                         valid_navs.append(val)
                 except ValueError:
                     continue
             
             if len(valid_navs) >= 1:
-                official_nav = valid_navs[0] # 获取最新的有效确权净值
+                official_nav = valid_navs[0]
                 official_yesterday_nav = valid_navs[1] if len(valid_navs) >= 2 else official_nav
     except Exception as e:
         print(f"⚠️ 场外官方数据解析提示 ({fund_code}): {e}")
 
-    # 2. 🌟 精准校准场内影子 ETF 盘中实时涨跌幅
     if is_domestic:
         try:
             url_stock = f"http://qt.gtimg.cn/q={track_code}"
@@ -58,7 +55,6 @@ def get_data(fund_code, track_code, is_domestic):
             if '~' in res_stock.text:
                 parts = res_stock.text.split('"')[1].split('~')
                 if len(parts) >= 5:
-                    # ✨ 修正对齐：parts[3]是实时价格，parts[4]是昨日收盘价
                     current_price = float(parts[3])
                     yesterday_close = float(parts[4])
                     if yesterday_close > 0:
@@ -76,13 +72,13 @@ def get_data(fund_code, track_code, is_domestic):
         "daily_growth": daily_growth
     }
 
+# 👑 核心改进：极致无感视觉排版 + 单基预估损益透出
 def push_to_feishu(summary_est, position_list):
     webhook_url = os.environ.get("FEISHU_WEBHOOK")
     if not webhook_url:
         print("⚠️ 未检测到加密密钥，跳过飞书推送流程。")
         return
 
-    # ⏱️ ✨ 修正对齐：强行将服务器时区锁定为亚洲/上海东八区标准时间
     tz_utc8 = timezone(timedelta(hours=8))
     time_str = datetime.now(tz_utc8).strftime("%m-%d %H:%M")
     
@@ -90,11 +86,21 @@ def push_to_feishu(summary_est, position_list):
     sign_dp = "+" if is_profit else ""
     header_template = "red" if is_profit else "green"
     
+    # ✨ 改进点一：采用高对比度独立区块结构，消灭视觉混乱
     detail_md = ""
     for pos in position_list:
         if pos['is_domestic']:
-            g_icon = "🔺" if "-" not in pos['daily_growth'] and pos['daily_growth'] != "0.0%" else "🔻"
-            detail_md += f"{g_icon} **{pos['name']}**\n └ 盘中涨跌: `{pos['daily_growth']}` | 最新市值: `￥{pos['estimated_value']:,.0f}`\n"
+            fund_pnl = pos['estimated_daily_profit']
+            is_fund_up = fund_pnl >= 0
+            
+            # 使用强烈色块标志：红圆形(🔴)代表上涨，绿圆形(🟢)代表下跌
+            g_icon = "🔴" if is_fund_up else "🟢"
+            f_sign = "+" if is_fund_up else ""
+            
+            detail_md += f"{g_icon} **{pos['name']}** (`{pos['code']}`)\n"
+            detail_md += f" ├ 盘中涨跌：`{pos['daily_growth']}`\n"
+            detail_md += f" ├ **今日损益**：**{f_sign}￥{fund_pnl:,.2f}**\n" # 🌟 新增核心诉求：单只基金今日盈亏
+            detail_md += f" └ 当前市值：`￥{pos['estimated_value']:,.0f}`\n\n"
 
     payload = {
         "msg_type": "interactive",
@@ -109,13 +115,13 @@ def push_to_feishu(summary_est, position_list):
                     "tag": "div",
                     "text": {
                         "tag": "lark_md",
-                        "content": f"⏱️ **同步时间**: `{time_str}` (北京/马来西亚标准时间)\n\n💰 **资产核心总览**:\n• 预估总资产: **￥{summary_est['total_value']:,.2f}**\n• 今日预计损益: **{sign_dp}{summary_est['daily_profit']:,.2f}**"
+                        "content": f"⏱️ **同步时间**: `{time_str}` (北京/马来西亚时间)\n\n💳 **资产账户总览**:\n• 预估总资产: **￥{summary_est['total_value']:,.2f}**\n• 今日总损益: **{sign_dp}￥{summary_est['daily_profit']:,.2f}**"
                     }
                 },
                 {"tag": "hr"},
                 {
                     "tag": "div",
-                    "text": {"tag": "lark_md", "content": f"📋 **A股持仓实时估值明细**:\n{detail_md}"}
+                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板**:\n{detail_md}"}
                 },
                 {
                     "tag": "note",
@@ -142,7 +148,8 @@ def update_dashboard_data():
         
         if info['is_domestic']:
             est_val = info['shares'] * data['estimated_nav']
-            est_day_prof = est_val * (data['daily_growth'] / (100 + data['daily_growth'])) if (100 + data['daily_growth']) != 0 else 0
+            # ✨ 改进点二：底层算法完美重构，直接算出各基金当日精准预估绝对盈亏数字
+            est_day_prof = info['shares'] * data['official_nav'] * (data['daily_growth'] / 100)
             est_growth_str = f"{round(data['daily_growth'], 2)}%"
         else:
             est_val = info['shares'] * data['official_nav']
@@ -166,6 +173,7 @@ def update_dashboard_data():
             "code": code, "name": info['name'], "is_domestic": info['is_domestic'], "shares": info['shares'], "cost_price": info['cost_price'],
             "estimated_nav": round(data['estimated_nav'], 4),
             "daily_growth": est_growth_str, "estimated_value": round(est_val, 2), "estimated_profit": round(est_prof, 2),
+            "estimated_daily_profit": round(est_day_prof, 2), # 🌟 新增字段向下游传递
             "official_nav": round(data['official_nav'], 4),
             "official_growth": f"{round(((data['official_nav']-data['official_yesterday_nav'])/data['official_yesterday_nav'])*100, 2)}%" if data['official_yesterday_nav'] > 0 else "0.0%",
             "official_value": round(off_val, 2), "official_profit": round(off_prof, 2)
@@ -184,7 +192,7 @@ def update_dashboard_data():
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
     push_to_feishu(summary_est, position_list)
-    print("🎉 飞书全链路自动化交割顺利通关！")
+    print("🎉 飞书高保真卡片优化版交割完毕！")
 
 if __name__ == "__main__":
     update_dashboard_data()
