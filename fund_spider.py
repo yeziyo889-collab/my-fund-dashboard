@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 
 # ====================================================
-# 💰 你的 8 支真实指数化基金持仓配置（全线精准对齐官方代码）
+# 💰 你的 8 支指数化基金持仓配置
 # ====================================================
 MY_POSITIONS = {
     "000216": {"name": "华安黄金ETF联接A", "track_code": "sh518880", "shares": 10000.0, "cost_price": 1.0300, "is_domestic": True},
@@ -17,7 +17,7 @@ MY_POSITIONS = {
     "009051": {"name": "易方达中证红利ETF联接A", "track_code": "sh515180", "shares": 10000.0, "cost_price": 1.1000, "is_domestic": True}
 }
 
-TRANSACTION_LOGS = [] # 个人买卖记录留空，等待你随时发我追加
+TRANSACTION_LOGS = [] # 历史明细留空
 
 def get_data(fund_code, track_code, is_domestic):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -25,29 +25,20 @@ def get_data(fund_code, track_code, is_domestic):
     official_yesterday_nav = 1.0
     daily_growth = 0.0
 
-    # 1. 安全抓取场外官方最新已公开净值
     try:
         url_jj = f"http://qt.gtimg.cn/q=jj{fund_code}"
         res_jj = requests.get(url_jj, headers=headers, timeout=5)
         res_jj.encoding = 'gbk'
         if '~' in res_jj.text:
             parts = res_jj.text.split('"')[1].split('~')
-            if len(parts) >= 3:
-                # 🛡️ 逻辑修正：parts[0]是代码，parts[1]是中文名，parts[2]才是真正的单位净值数字
-                official_nav = float(parts[2])
-            
-            # 尝试安全抓取前一日净值，防范非数字异常
+            if len(parts) >= 3: official_nav = float(parts[2])
             if len(parts) >= 5:
-                try:
-                    official_yesterday_nav = float(parts[4])
-                except ValueError:
-                    official_yesterday_nav = official_nav
-            else:
-                official_yesterday_nav = official_nav
+                try: official_yesterday_nav = float(parts[4])
+                except ValueError: official_yesterday_nav = official_nav
+            else: official_yesterday_nav = official_nav
     except Exception as e:
-        print(f"⚠️ 场外官方数据解析提示 ({fund_code}): {e}")
+        print(f"场外解析异常 {fund_code}: {e}")
 
-    # 2. 联动场内动态涨跌幅
     if is_domestic:
         try:
             url_stock = f"http://qt.gtimg.cn/q={track_code}"
@@ -60,76 +51,82 @@ def get_data(fund_code, track_code, is_domestic):
                 if yesterday_close > 0:
                     daily_growth = ((current_price - yesterday_close) / yesterday_close) * 100
         except Exception as e:
-            print(f"⚠️ 场内影子网路同步提示 ({track_code}): {e}")
+            print(f"场内同步异常 {track_code}: {e}")
     else:
-        daily_growth = 0.0  # 海外QDII在14:30保持静态资产
+        daily_growth = 0.0
 
     estimated_nav = official_nav * (1 + daily_growth / 100)
-    return {
-        "official_nav": official_nav, 
-        "official_yesterday_nav": official_yesterday_nav, 
-        "estimated_nav": estimated_nav, 
-        "daily_growth": daily_growth
-    }
+    return {"official_nav": official_nav, "official_yesterday_nav": official_yesterday_nav, "estimated_nav": estimated_nav, "daily_growth": daily_growth}
 
-def push_to_wechat(summary_est, position_list):
-    app_token = os.environ.get("WXPUSHER_APP_TOKEN")
-    uid = os.environ.get("WXPUSHER_UID")
-    
-    if not app_token or not uid:
-        print("⚠️ 未检测到加密密钥，跳过微信推送流程。")
+# 👑 飞书高保真智能卡片发送引擎
+def push_to_feishu(summary_est, position_list):
+    webhook_url = os.environ.get("FEISHU_WEBHOOK")
+    if not webhook_url:
+        print("⚠️ 未检测到 FEISHU_WEBHOOK 密钥，跳过推送。")
         return
 
     time_str = datetime.now().strftime("%m-%d %H:%M")
-    color_dp = "#ef4444" if summary_est['daily_profit'] >= 0 else "#22c55e"
-    sign_dp = "+" if summary_est['daily_profit'] >= 0 else ""
+    is_profit = summary_est['daily_profit'] >= 0
+    sign_dp = "+" if is_profit else ""
     
-    html_content = f"""
-    <div style="font-family: sans-serif; padding: 12px; background-color: #f8fafc; border-radius: 10px;">
-        <h3 style="color: #0f172a; margin-bottom: 4px; font-size: 16px;">📊 14:30 盘中资产动态快报</h3>
-        <p style="font-size: 11px; color: #64748b; margin-top:0; margin-bottom:12px;">同步时间: {time_str}</p>
-        
-        <div style="background: #1e293b; color: #fff; padding: 16px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
-            <div style="font-size: 12px; color: #cbd5e1;">预估总资产 (元)</div>
-            <div style="font-size: 26px; font-weight: bold; margin: 6px 0; font-family: monospace;">￥{summary_est['total_value']:,.2f}</div>
-            <div style="font-size: 13px; color: {color_dp}; font-weight: bold;">
-                今日预计损益: {sign_dp}{summary_est['daily_profit']:,.2f}
-            </div>
-        </div>
-        
-        <h4 style="color: #475569; margin-bottom: 6px; font-size: 13px;">📋 A股持仓实时估值明细:</h4>
-        <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
-    """
+    # 🎨 赚了亮红(red)，亏了披绿(green)
+    header_template = "red" if is_profit else "green"
     
+    detail_md = ""
     for pos in position_list:
         if pos['is_domestic']:
-            p_color = "#ef4444" if "-" not in pos['daily_growth'] and pos['daily_growth'] != "0.0%" else "#22c55e"
-            html_content += f"""
-            <tr style="border-bottom: 1px solid #e2e8f0; height: 36px;">
-                <td style="color: #334155; font-weight: bold;">{pos['name']}</td>
-                <td style="text-align: right; color: {p_color}; font-weight: bold; font-family: monospace; width: 70px;">{pos['daily_growth']}</td>
-                <td style="text-align: right; color: #1e293b; font-weight: bold; font-family: monospace; width: 90px;">￥{pos['estimated_value']:,.0f}</td>
-            </tr>
-            """
-            
-    html_content += """
-        </table>
-        <p style="font-size: 10px; color: #94a3b8; margin-top: 16px; text-align: center; font-style: italic;">💡 提示：美股QDII时差已在14:30推送中自动隐藏</p>
-    </div>
-    """
+            g_icon = "🔺" if "-" not in pos['daily_growth'] and pos['daily_growth'] != "0.0%" else "🔻"
+            detail_md += f"{g_icon} **{pos['name']}**\n └ 涨跌: `{pos['daily_growth']}` | 市值: `￥{pos['estimated_value']:,.0f}`\n"
 
-    url = "https://wxpusher.zjiecode.com/api/send/message"
     payload = {
-        "appToken": app_token,
-        "content": html_content,
-        "contentType": 2, 
-        "uids": [uid]
+        "msg_type": "interactive",
+        "card": {
+            "config": {
+                "wide_screen_mode": True
+            },
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": "📊 14:30 盘中资产动态快报"
+                },
+                "template": header_template
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"⏱️ **同步时间**: `{time_str}`\n\n💰 **资产核心总览**:\n• 预估总资产: **￥{summary_est['total_value']:,.2f}**\n• 今日预计损益: **{sign_dp}{summary_est['daily_profit']:,.2f}**"
+                    }
+                },
+                {
+                    "tag": "hr"
+                },
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"📋 **A股标的实时估值明细**:\n{detail_md}"
+                    }
+                },
+                {
+                    "tag": "note",
+                    "elements": [
+                        {
+                            "tag": "plain_text",
+                            "content": "💡 提示：美股QDII标的时差已在盘中推送中自动隐藏"
+                        }
+                    ]
+                }
+            ]
+        }
     }
+    
     try:
-        res = requests.post(url, json=payload, timeout=10)
-        print("微信投递结果日志:", res.json())
+        res = requests.post(webhook_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+        print("飞书接口回执:", res.json())
     except Exception as e:
-        print("微信推送网络异常:", e)
+        print("飞书推送网络异常:", e)
 
 def update_dashboard_data():
     est_total_value, est_total_cost, est_daily_profit = 0, 0, 0
@@ -183,7 +180,9 @@ def update_dashboard_data():
     with open('data.json', 'w', encoding='utf-8') as f:
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
-    push_to_wechat(summary_est, position_list)
+    # ✨ 修正点：这里已经完美切换为飞书发信引擎
+    push_to_feishu(summary_est, position_list)
+    print("🎉 飞书高保真卡片数据处理完毕！")
 
 if __name__ == "__main__":
     update_dashboard_data()
