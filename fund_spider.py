@@ -17,7 +17,7 @@ MY_POSITIONS = {
     "009051": {"name": "易方达中证红利ETF联接A", "track_code": "sh515180", "shares": 10000.0, "cost_price": 1.1000, "is_domestic": True}
 }
 
-TRANSACTION_LOGS = [] # 个人买卖记录留空
+TRANSACTION_LOGS = [] # 交易流水留空
 
 def get_data(fund_code, track_code, is_domestic):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -31,16 +31,12 @@ def get_data(fund_code, track_code, is_domestic):
         res_jj.encoding = 'gbk'
         if '~' in res_jj.text:
             parts = res_jj.text.split('"')[1].split('~')
-            
             valid_navs = []
             for p in parts[2:]:
                 try:
                     val = float(p)
-                    if 0.1 < val < 100.0:
-                        valid_navs.append(val)
-                except ValueError:
-                    continue
-            
+                    if 0.1 < val < 100.0: valid_navs.append(val)
+                except ValueError: continue
             if len(valid_navs) >= 1:
                 official_nav = valid_navs[0]
                 official_yesterday_nav = valid_navs[1] if len(valid_navs) >= 2 else official_nav
@@ -65,14 +61,9 @@ def get_data(fund_code, track_code, is_domestic):
         daily_growth = 0.0
 
     estimated_nav = official_nav * (1 + daily_growth / 100)
-    return {
-        "official_nav": official_nav, 
-        "official_yesterday_nav": official_yesterday_nav, 
-        "estimated_nav": estimated_nav, 
-        "daily_growth": daily_growth
-    }
+    return {"official_nav": official_nav, "official_yesterday_nav": official_yesterday_nav, "estimated_nav": estimated_nav, "daily_growth": daily_growth}
 
-# 👑 核心改进：极致无感视觉排版 + 单基预估损益透出
+# 👑 核心重构：动态排序算法 + 六级绿红情绪渐变渲染
 def push_to_feishu(summary_est, position_list):
     webhook_url = os.environ.get("FEISHU_WEBHOOK")
     if not webhook_url:
@@ -82,25 +73,41 @@ def push_to_feishu(summary_est, position_list):
     tz_utc8 = timezone(timedelta(hours=8))
     time_str = datetime.now(tz_utc8).strftime("%m-%d %H:%M")
     
+    # 🎨 依照用户全新指令：总盘赚了亮绿(green)，亏了披红(red)
     is_profit = summary_est['daily_profit'] >= 0
     sign_dp = "+" if is_profit else ""
-    header_template = "red" if is_profit else "green"
+    header_template = "green" if is_profit else "red"
     
-    # ✨ 改进点一：采用高对比度独立区块结构，消灭视觉混乱
+    # 🎯 步骤一：筛选出 A 股影子标的，并按照涨跌幅数值执行【从高到低降序排列】
+    domestic_positions = [pos for pos in position_list if pos['is_domestic']]
+    domestic_positions.sort(key=lambda x: x['daily_growth_raw'], reverse=True)
+    
+    # 🎯 步骤二：遍历排序后的资产，进行六级色阶渐变匹配
     detail_md = ""
-    for pos in position_list:
-        if pos['is_domestic']:
-            fund_pnl = pos['estimated_daily_profit']
-            is_fund_up = fund_pnl >= 0
+    for pos in domestic_positions:
+        val = pos['daily_growth_raw']
+        
+        # 🌈 渐变色谱映射 (绿至红)
+        if val > 1.5:
+            g_icon = "🟢"  # 🟢 强劲大涨 (涨幅 > 1.5%)
+        elif 0.5 < val <= 1.5:
+            g_icon = "🍏"  # 🍏 温和上涨 (0.5% 到 1.5%)
+        elif 0.0 < val <= 0.5:
+            g_icon = "🌱"  # 🌱 微幅小涨 (0.0% 到 0.5%)
+        elif -0.5 <= val <= 0.0:
+            g_icon = "🍂"  # 🍂 见顶微跌 (-0.5% 到 0.0%)
+        elif -1.5 <= val < -0.5:
+            g_icon = "🍎"  # 🍎 中度震荡 (-1.5% 到 -0.5%)
+        else:
+            g_icon = "🔴"  # 🔴 强劲大跌 (跌幅 < -1.5%)
             
-            # 使用强烈色块标志：红圆形(🔴)代表上涨，绿圆形(🟢)代表下跌
-            g_icon = "🔴" if is_fund_up else "🟢"
-            f_sign = "+" if is_fund_up else ""
-            
-            detail_md += f"{g_icon} **{pos['name']}** (`{pos['code']}`)\n"
-            detail_md += f" ├ 盘中涨跌：`{pos['daily_growth']}`\n"
-            detail_md += f" ├ **今日损益**：**{f_sign}￥{fund_pnl:,.2f}**\n" # 🌟 新增核心诉求：单只基金今日盈亏
-            detail_md += f" └ 当前市值：`￥{pos['estimated_value']:,.0f}`\n\n"
+        fund_pnl = pos['estimated_daily_profit']
+        f_sign = "+" if fund_pnl >= 0 else ""
+        
+        detail_md += f"{g_icon} **{pos['name']}** (`{pos['code']}`)\n"
+        detail_md += f" ├ 盘中涨跌：`{pos['daily_growth']}`\n"
+        detail_md += f" ├ 今日损益：**{f_sign}￥{fund_pnl:,.2f}**\n"
+        detail_md += f" └ 当前市值：`￥{pos['estimated_value']:,.0f}`\n\n"
 
     payload = {
         "msg_type": "interactive",
@@ -121,7 +128,7 @@ def push_to_feishu(summary_est, position_list):
                 {"tag": "hr"},
                 {
                     "tag": "div",
-                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板**:\n{detail_md}"}
+                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板 (按涨幅降序)**:\n{detail_md}"}
                 },
                 {
                     "tag": "note",
@@ -148,7 +155,6 @@ def update_dashboard_data():
         
         if info['is_domestic']:
             est_val = info['shares'] * data['estimated_nav']
-            # ✨ 改进点二：底层算法完美重构，直接算出各基金当日精准预估绝对盈亏数字
             est_day_prof = info['shares'] * data['official_nav'] * (data['daily_growth'] / 100)
             est_growth_str = f"{round(data['daily_growth'], 2)}%"
         else:
@@ -173,7 +179,8 @@ def update_dashboard_data():
             "code": code, "name": info['name'], "is_domestic": info['is_domestic'], "shares": info['shares'], "cost_price": info['cost_price'],
             "estimated_nav": round(data['estimated_nav'], 4),
             "daily_growth": est_growth_str, "estimated_value": round(est_val, 2), "estimated_profit": round(est_prof, 2),
-            "estimated_daily_profit": round(est_day_prof, 2), # 🌟 新增字段向下游传递
+            "daily_growth_raw": data['daily_growth'], # 🌟 注入底层原始浮点数供上游排序引擎识别
+            "estimated_daily_profit": round(est_day_prof, 2), 
             "official_nav": round(data['official_nav'], 4),
             "official_growth": f"{round(((data['official_nav']-data['official_yesterday_nav'])/data['official_yesterday_nav'])*100, 2)}%" if data['official_yesterday_nav'] > 0 else "0.0%",
             "official_value": round(off_val, 2), "official_profit": round(off_prof, 2)
@@ -192,7 +199,7 @@ def update_dashboard_data():
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
     push_to_feishu(summary_est, position_list)
-    print("🎉 飞书高保真卡片优化版交割完毕！")
+    print("🎉 飞书绿涨红跌阶梯排序版顺利交割！")
 
 if __name__ == "__main__":
     update_dashboard_data()
