@@ -30,9 +30,8 @@ jobs:
 
     - name: 运行机器人抓取数据并推送 🚀
       env:
-        # 👑 核心改进：把 GitHub 网页端保存的保险箱钥匙，传授给运行中的 Python 脚本
-        WXPUSHER_APP_TOKEN: ${{ secrets.WXPUSHER_APP_TOKEN }}
-        WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+        # 👑 检查这里！必须是 FEISHU_WEBHOOK，不能是 DINGTALK_WEBHOOK
+        FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
       run: python fund_spider.py
 
     - name: 提交并推送数据
