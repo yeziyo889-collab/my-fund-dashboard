@@ -74,64 +74,77 @@ def parse_historical_ledger():
     csv_dates_by_fund = {code: set() for code in FEE_RULES.keys()}
     tz_utc8 = timezone(timedelta(hours=8))
     total_realized_pnl = 0.0
+    diagnostic_info = "OK"
     
-    # 🌟 核心升级：全自动动态路由检索文件，解决因空格或特殊名称导致的失联故障
+    # 🌟 智能全盘搜索匹配
     target_file = DEFAULT_CSV_NAME
     if not os.path.exists(target_file):
-        print(f"🔍 提示：未找到标准命名的账单文件，启动全盘智能检索 fallback 机制...")
+        found = False
         for file in os.listdir('.'):
-            if file.endswith('.csv') and ('交易明细' in file or '基金' in file):
+            if file.endswith('.csv') and ('交易明细' in file or '基金' in file or 'csv' in file.lower()):
                 target_file = file
-                print(f"🎯 成功捕获并自动路由至匹配账单: [{target_file}]")
+                found = True
                 break
+        if not found:
+            # 雷达触达：记录当前GitHub服务器下所有文件名，原样返回供飞书透出
+            diagnostic_info = f"未找到任何CSV文件。当前目录有: {str(os.listdir('.'))}"
 
-    if os.path.exists(target_file):
+    if os.path.exists(target_file) and diagnostic_info == "OK":
         raw_records = []
-        with open(target_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader: raw_records.append(row)
-        raw_records.reverse()
-
-        for row in raw_records:
-            code = row.get('基金代码', '').strip().zfill(6)
-            if code not in FEE_RULES: continue
-            tx_date_str = row.get('交易日期', '').strip().replace('/', '-')
-            tx_type = row.get('交易类型', '').strip()
-            csv_dates_by_fund[code].add(tx_date_str)
-            
+        # 🌟 多重编码自适应盲测读取
+        for enc in ['utf-8-sig', 'utf-8', 'gbk']:
             try:
-                dt_obj = datetime.strptime(tx_date_str, "%Y-%m-%d").replace(tzinfo=tz_utc8)
-                conf_amt = float(row['确认金额']) if row['确认金额'] else 0.0
-                conf_shares = float(row['确认份额']) if row['确认份额'] else 0.0
-                fee = float(row['手续费']) if row['手续费'] else 0.0
-            except (ValueError, KeyError): continue
+                with open(target_file, 'r', encoding=enc) as f:
+                    reader = csv.DictReader(f)
+                    raw_records = list(reader)
+                    if raw_records and '基金代码' in raw_records[0]:
+                        break
+            except Exception: continue
 
-            if conf_shares <= 0: continue
+        if not raw_records:
+            diagnostic_info = f"文件 [{target_file}] 读取失败或表头格式不匹配。"
+        else:
+            raw_records.reverse()
+            for row in raw_records:
+                code = row.get('基金代码', '')
+                if not code: continue
+                code = code.strip().zfill(6)
+                if code not in FEE_RULES: continue
+                tx_date_str = row.get('交易日期', '').strip().replace('/', '-')
+                tx_type = row.get('交易类型', '').strip()
+                csv_dates_by_fund[code].add(tx_date_str)
+                
+                try:
+                    dt_obj = datetime.strptime(tx_date_str, "%Y-%m-%d").replace(tzinfo=tz_utc8)
+                    conf_amt = float(row['确认金额']) if row['确认金额'] else 0.0
+                    conf_shares = float(row['确认份额']) if row['确认份额'] else 0.0
+                    fee = float(row['手续费']) if row['手续费'] else 0.0
+                except (ValueError, KeyError, TypeError): continue
 
-            if "买入" in tx_type or "定投" in tx_type:
-                calced_nav = (conf_amt - fee) / conf_shares
-                fifo_pools[code].append({"dt": dt_obj, "shares": conf_shares, "price": calced_nav, "amt": conf_amt, "type": tx_type, "org_shares": conf_shares})
-                transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "买入", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": 0.0})
-            elif "卖出" in tx_type or "赎回" in tx_type:
-                calced_nav = (conf_amt + fee) / conf_shares
-                shares_to_deduct = conf_shares
-                matched_cost = 0.0
-                while shares_to_deduct > 0 and fifo_pools[code]:
-                    oldest = fifo_pools[code][0]
-                    if oldest['shares'] <= shares_to_deduct:
-                        matched_cost += oldest['shares'] * oldest['price']
-                        shares_to_deduct -= oldest['shares']
-                        fifo_pools[code].pop(0)
-                    else:
-                        matched_cost += shares_to_deduct * oldest['price']
-                        oldest['amt'] *= (oldest['shares'] - shares_to_deduct) / oldest['shares']
-                        oldest['shares'] -= shares_to_deduct
-                        shares_to_deduct = 0
-                realized_pnl = conf_amt - matched_cost
-                total_realized_pnl += realized_pnl
-                transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "卖出", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": round(realized_pnl, 2)})
-    else:
-        print("❌ CRITICAL ERROR: 仓库中没有找到任何合法的交易明细 .csv 文件，请检查是否已上传至根目录！")
+                if conf_shares <= 0: continue
+
+                if "买入" in tx_type or "定投" in tx_type:
+                    calced_nav = (conf_amt - fee) / conf_shares
+                    fifo_pools[code].append({"dt": dt_obj, "shares": conf_shares, "price": calced_nav, "amt": conf_amt, "type": tx_type, "org_shares": conf_shares})
+                    transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "买入", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": 0.0})
+                elif "卖出" in tx_type or "赎回" in tx_type:
+                    calced_nav = (conf_amt + fee) / conf_shares
+                    shares_to_deduct = conf_shares
+                    matched_cost = 0.0
+                    while shares_to_deduct > 0 and fifo_pools[code]:
+                        oldest = fifo_pools[code][0]
+                        if oldest['shares'] <= shares_to_deduct:
+                            matched_cost += oldest['shares'] * oldest['price']
+                            shares_to_deduct -= oldest['shares']
+                            fifo_pools[code].pop(0)
+                        else:
+                            matched_cost += shares_to_deduct * oldest['price']
+                            oldest['amt'] *= (oldest['shares'] - shares_to_deduct) / oldest['shares']
+                            oldest['shares'] -= shares_to_deduct
+                            shares_to_deduct = 0
+                    realized_pnl = conf_amt - matched_cost
+                    total_realized_pnl += realized_pnl
+                    transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "卖出", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": round(realized_pnl, 2)})
 
     # 智能每月 10 号全自动定投扣款引擎
     today_dt = datetime.now(tz_utc8)
@@ -147,7 +160,7 @@ def parse_historical_ledger():
             transaction_logs.append({"date": today_str, "name": f"🤖自动定投·{rule['name']}", "type": "买入", "amount": dca_amt, "price": round(current_nav, 4), "shares": round(sim_shares, 2), "pnl": 0.0})
 
     transaction_logs.reverse()
-    return fifo_pools, transaction_logs, total_realized_pnl
+    return fifo_pools, transaction_logs, total_realized_pnl, diagnostic_info
 
 def calculate_target_value(lots, annual_rate, today_dt):
     total_target = 0.0
@@ -161,7 +174,7 @@ def calculate_target_value(lots, annual_rate, today_dt):
         total_target += lot['amt'] * ((1 + r_d) ** days)
     return total_target
 
-def push_to_feishu(summary_est, position_list):
+def push_to_feishu(summary_est, position_list, diag_status):
     webhook_url = os.environ.get("FEISHU_WEBHOOK")
     if not webhook_url: return
     tz_utc8 = timezone(timedelta(hours=8))
@@ -179,7 +192,6 @@ def push_to_feishu(summary_est, position_list):
         elif -0.5 <= val <= 0.0: g_icon = "🍂"
         elif -1.5 <= val < -0.5: g_icon = "🍎"
         else: g_icon = "🔴"
-        
         detail_md += f"{g_icon} **{pos['name']}** (`{pos['code']}`)\n ├ 盘中涨跌：`{pos['daily_growth']}` | **预计收益**：**￥{pos['estimated_daily_profit']:,.2f}**\n ├ 目标差额：`￥{pos['value_difference']:,.2f}` | 实际权重：`{pos['actual_weight']}%` (偏离 `{pos['weight_diff']:+.2f}%`)\n └ 当前实际价值：`￥{pos['estimated_value']:,.0f}`\n\n"
 
     sign_diff = "+" if summary_est['total_diff'] >= 0 else ""
@@ -203,17 +215,21 @@ def push_to_feishu(summary_est, position_list):
                             f"⏱️ **同步时间**: `{time_str}` (北京/马来西亚时间)\n\n"
                             f"💳 **资产账户总览**:\n"
                             f"• 当前持仓本金: **￥{summary_est['total_position_cost']:,.2f}** (含定投与手动买入)\n"
-                            f"• 今日总预计损益: **{sign_dp}￥{summary_est['daily_profit']:,.2f}** (已锁定真实持仓数据)\n"
+                            f"• 今日总预计损益: **{sign_dp}￥{summary_est['daily_profit']:,.2f}**\n"
                             f"• 累计已实现损益: **{sign_rp}￥{summary_est['realized_pnl']:,.2f}**\n"
                             f"• 目标与实际价值总差额: **{sign_diff}{summary_est['total_diff_pct']:.2f}%**\n"
-                            f"• 总体配置阵型总偏离度: **{summary_est['total_weight_deviation']:.2f}%** (方案A)"
+                            f"• 总体配置阵型总偏离度: **{summary_est['total_weight_deviation']:.2f}%**"
                         )
                     }
                 },
                 {"tag": "hr"},
                 {
                     "tag": "div",
-                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板 (按涨幅降序)**:\n{detail_md}"}
+                    "text": {"tag": "lark_md", "content": f"📋 **持仓精简估值看板 (按涨幅降序)**:\n{detail_md if detail_md else '⚠️ 暂无有效持仓明细（请核对下方雷达诊断）\n'}"}
+                },
+                {
+                    "tag": "note",
+                    "elements": [{"tag": "plain_text", "content": f"📡 云端雷达诊断状态: {diag_status}"}]
                 }
             ]
         }
@@ -224,7 +240,7 @@ def push_to_feishu(summary_est, position_list):
 def update_dashboard_data():
     tz_utc8 = timezone(timedelta(hours=8))
     today_dt = datetime.now(tz_utc8)
-    fifo_pools, transaction_logs, total_realized_pnl = parse_historical_ledger()
+    fifo_pools, transaction_logs, total_realized_pnl, diag_status = parse_historical_ledger()
     
     total_dca_pool_amt = sum(r['dca_amount'] for r in FEE_RULES.values())
     raw_position_data = {}
@@ -284,7 +300,7 @@ def update_dashboard_data():
         "realized_pnl": round(total_realized_pnl, 2),
         "total_diff": round(total_diff, 2),
         "total_diff_pct": total_diff_pct,
-        "total_weight_deviation": total_weight_deviation
+        "total_weight_deviation": round(total_weight_deviation, 2)
     }
     
     dashboard_data = {
@@ -295,8 +311,8 @@ def update_dashboard_data():
     with open('data.json', 'w', encoding='utf-8') as f:
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
-    push_to_feishu(summary_est, position_list)
-    print("🎉 高级防错全路由版本已完成升级，14:30 动态清算成功交割！")
+    push_to_feishu(summary_est, position_list, diag_status)
+    print("🎉 防错诊断雷达版已部署！")
 
 if __name__ == "__main__":
     update_dashboard_data()
