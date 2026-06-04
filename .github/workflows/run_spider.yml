@@ -1,49 +1,31 @@
-name: Update Fund Data
+name: Run Fund Spider
 
 on:
+  push:
+    branches:
+      - main  # 🌟 核心升级：以后你只要上传新账单，系统就会全自动立刻触发运行，无需手动操作
+  workflow_dispatch:  # 🌟 核心升级：允许你在 Actions 页面随时手动点击 "Run workflow" 刷新数据
   schedule:
-    # 🇨🇳 北京/马来西亚时间 14:30 = 零时区 UTC 时间 06:30
-    - cron: '30 6 * * 1-5'
-  workflow_dispatch: # 允许手动点击运行
-
-permissions:
-  contents: write
+    - cron: '30 6 * * 1-5'  # 每天中国时间 14:30 自动定时运行（避开周末）
 
 jobs:
-  update-data:
+  run-spider:
     runs-on: ubuntu-latest
     steps:
-    - name: 检出仓库代码
-      uses: actions/checkout@v4
-      with:
-        persist-credentials: true
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: 设置 Python 环境
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    - name: 安装工具箱依赖
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
 
-    - name: 运行机器人抓取数据并推送 🚀
-      env:
-        # 👑 检查这里！必须是 FEISHU_WEBHOOK，不能是 DINGTALK_WEBHOOK
-        FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-      run: python fund_spider.py
-
-    - name: 提交并推送数据
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        git config --local user.name "github-actions[bot]"
-        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git add data.json
-        if ! git diff --cached --quiet; then
-          git commit -m "自动更新基金数据"
-          git push origin HEAD:main
-        else
-          echo "数据无变化，跳过推送"
-        fi
+      - name: Run script
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+        run: python fund_spider.py
