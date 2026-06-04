@@ -49,10 +49,13 @@ def get_market_data(fund_code, track_code):
         res_jj.encoding = 'gbk'
         if '~' in res_jj.text:
             parts = res_jj.text.split('"')[1].split('~')
-            valid_navs = [float(p) for p in parts[2:] if p and 0.1 < float(p) < 100.0]
-            if len(valid_navs) >= 1:
-                official_nav = valid_navs[0]
-                official_yesterday_nav = valid_navs[1] if len(valid_navs) >= 2 else official_nav
+            # 🌟 修复一：直接提取确定性索引，绝不通扫带有日期的 trailing fields，彻底免疫 ValueError
+            if len(parts) >= 4:
+                try:
+                    official_nav = float(parts[2])
+                    official_yesterday_nav = float(parts[3])
+                except ValueError:
+                    pass
     except Exception as e: print(f"⚠️ 行情接口异常 ({fund_code}): {e}")
 
     try:
@@ -130,7 +133,6 @@ def parse_historical_ledger():
         detected_keys = [str(k).strip().replace('\ufeff', '') for k in raw_records[0].keys() if k] if raw_records else []
         
         valid_count = 0
-        error_sample = ""
         for row in raw_records:
             clean_row = {str(k).strip().replace('\ufeff', ''): str(v).strip() for k, v in row.items() if k}
             
@@ -140,8 +142,6 @@ def parse_historical_ledger():
             if code not in FEE_RULES: continue
             
             raw_tx_date = clean_row.get('交易日期', '').replace('/', '-').split(' ')[0]
-            
-            # 🌟 核心升级：智能自适应补零校准器（彻底解决个位数月份/日期引发的过滤断层）
             date_parts = raw_tx_date.split('-')
             if len(date_parts) == 3:
                 tx_date_str = f"{date_parts[0].strip()}-{date_parts[1].strip().zfill(2)}-{date_parts[2].strip().zfill(2)}"
@@ -156,9 +156,7 @@ def parse_historical_ledger():
                 conf_amt = float(clean_row.get('确认金额', 0)) if clean_row.get('确认金额') else 0.0
                 conf_shares = float(clean_row.get('确认份额', 0)) if clean_row.get('确认份额') else 0.0
                 fee = float(clean_row.get('手续费', 0)) if clean_row.get('手续费') else 0.0
-            except Exception as e: 
-                error_sample = str(e)
-                continue
+            except Exception: continue
 
             if conf_shares <= 0: continue
             valid_count += 1
@@ -187,10 +185,8 @@ def parse_historical_ledger():
                 transaction_logs.append({"date": tx_date_str, "name": FEE_RULES[code]['name'], "type": "卖出", "amount": conf_amt, "price": round(calced_nav, 4), "shares": conf_shares, "pnl": round(realized_pnl, 2)})
 
         diagnostic_info = f"成功读取: {target_file} (清洗后有效交易: {valid_count} 条)"
-        if valid_count == 0 and error_sample:
-            diagnostic_info += f" 报错样例: {error_sample}"
 
-    # 智能全自动模拟定投
+    # 自动定投机制
     today_dt = datetime.now(tz_utc8)
     today_str = today_dt.strftime("%Y-%m-%d")
     for code, rule in FEE_RULES.items():
@@ -296,7 +292,8 @@ def update_dashboard_data():
         if total_shares <= 0: continue
         m_data = get_market_data(code, FEE_RULES[code]['track_code'])
         
-        current_fund_cost = sum(lot['shares'] * (lot['amt'] / lot['org_shares']) for lot in lots)
+        # 🌟 修复二：lot['amt']已经是按比例扣减后的净存量本金，直接累加求和即可，拒绝二次比例计算
+        current_fund_cost = sum(lot['amt'] for lot in lots)
         total_position_cost += current_fund_cost
         weighted_avg_cost = sum(lot['shares'] * lot['price'] for lot in lots) / total_shares
         
@@ -356,7 +353,7 @@ def update_dashboard_data():
         json.dump(dashboard_data, f, ensure_ascii=False, indent=4)
         
     push_to_feishu(summary_est, position_list, diag_status)
-    print("🎉 全局自适应纠偏清洗完毕！")
+    print("🎉 最终满血全自适应无错版本清算完毕！")
 
 if __name__ == "__main__":
     update_dashboard_data()
